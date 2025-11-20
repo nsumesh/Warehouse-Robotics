@@ -23,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'train_ppo = rl_nav.train_ppo:main',  # <-- what ros2 run will call
+            'ppo_controller = rl_nav.ppo_controller_node:main',
         ],
     },
 )
