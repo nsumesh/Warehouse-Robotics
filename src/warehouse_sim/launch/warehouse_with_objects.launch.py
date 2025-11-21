@@ -35,7 +35,7 @@ def generate_launch_description():
         actions=[
             Node(
                 package='warehouse_sim',
-                executable='custom_warehouse',
+                executable='warehouse_spawner',
                 name='warehouse_object_spawner',
                 output='screen'
             )

@@ -20,7 +20,6 @@ python3 -m pip install --user "numpy<2" gymnasium==0.29.1 stable-baselines3==2.3
 
 > Why these pins? They avoid known Gym/NumPy incompatibilities and match Stable‑Baselines3 expectations.
 
-<<<<<<< Updated upstream
 ---
 
 ## 2) Build the package
@@ -160,19 +159,12 @@ source ~/MSML_642_FinalProject/install/setup.bash
 ```
 
 That’s it—launch Gazebo, spawn the robot, run `train_ppo`, and watch the policy learn.
-=======
-# Launch full simulation (with GUI)
-bash scripts/run_all.sh
 
-## Compiling and running custom world with objects
-# build project
+## Building custom world
+### Run the following commands 
+```bash
+# Clean and rebuild
 cd ~/ros2_ws
+rm -rf build install log
 colcon build --packages-select warehouse_sim
-source install/setup.bash
-
-# launch warehouse world
-ros2 launch warehouse_sim warehouse_with_objects.launch.py
-
-
-
->>>>>>> Stashed changes
+```
