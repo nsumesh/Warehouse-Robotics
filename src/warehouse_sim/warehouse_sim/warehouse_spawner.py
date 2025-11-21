@@ -188,7 +188,7 @@ class WarehouseObjectSpawner(Node):
         
         # Set pose
         request.initial_pose = Pose()
-        request.initial_pose.position = Point(x=x, y=y, z=z)
+        request.initial_pose.position = Point(x=float(x), y=float(y), z=float(z))
         
         # Convert RPY to quaternion
         cy = math.cos(yaw * 0.5)

@@ -4,12 +4,12 @@
   <name>warehouse_sim</name>
   <version>0.0.1</version>
   <description>Warehouse simulation</description>
+  <maintainer email="youl10@umd.com">Yash Oulkar</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
   <depend>rclpy</depend>
-  <depend>gazebo_ros</depend>
   <depend>gazebo_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>

@@ -1,0 +1,115 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="warehouse">
+    
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+    
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.5 0.5 0.5 1</ambient>
+            <diffuse>0.5 0.5 0.5 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    
+    <model name="warehouse_walls">
+      <static>true</static>
+      <link name="walls">
+        <collision name="north_wall">
+          <pose>0 15 1.5 0 0 0</pose>
+          <geometry>
+            <box><size>30 0.2 3</size></box>
+          </geometry>
+        </collision>
+        <visual name="north_wall_visual">
+          <pose>0 15 1.5 0 0 0</pose>
+          <geometry>
+            <box><size>30 0.2 3</size></box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+          </material>
+        </visual>
+        
+        <collision name="south_wall">
+          <pose>0 -15 1.5 0 0 0</pose>
+          <geometry>
+            <box><size>30 0.2 3</size></box>
+          </geometry>
+        </collision>
+        <visual name="south_wall_visual">
+          <pose>0 -15 1.5 0 0 0</pose>
+          <geometry>
+            <box><size>30 0.2 3</size></box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+          </material>
+        </visual>
+        
+        <collision name="east_wall">
+          <pose>15 0 1.5 0 0 0</pose>
+          <geometry>
+            <box><size>0.2 30 3</size></box>
+          </geometry>
+        </collision>
+        <visual name="east_wall_visual">
+          <pose>15 0 1.5 0 0 0</pose>
+          <geometry>
+            <box><size>0.2 30 3</size></box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+          </material>
+        </visual>
+        
+        <collision name="west_wall">
+          <pose>-15 0 1.5 0 0 0</pose>
+          <geometry>
+            <box><size>0.2 30 3</size></box>
+          </geometry>
+        </collision>
+        <visual name="west_wall_visual">
+          <pose>-15 0 1.5 0 0 0</pose>
+          <geometry>
+            <box><size>0.2 30 3</size></box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    
+  </world>
+</sdf>

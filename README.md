@@ -168,3 +168,8 @@ cd ~/ros2_ws
 rm -rf build install log
 colcon build --packages-select warehouse_sim
 ```
+
+# Run the launch script
+```bash
+~/MSML642FinalProject/launch_warehouse.sh
+```

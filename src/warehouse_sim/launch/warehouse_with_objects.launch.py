@@ -1,48 +1,41 @@
 #!/usr/bin/env python3
 
 import os
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, IncludeLaunchDescription, RegisterEventHandler, TimerAction
-from launch.event_handlers import OnProcessExit
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
-
+from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    
-
-    pkg_gazebo_ros = get_package_share_directory('gazebo_ros')
-    pkg_warehouse_sim = get_package_share_directory('warehouse_sim')
-    
-
-    world_file = os.path.join(pkg_warehouse_sim, 'worlds', 'warehouse_empty.world')
-    
-
-    gazebo = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_gazebo_ros, 'launch', 'gazebo.launch.py')
-        ),
-        launch_arguments={
-            'world': world_file,
-            'verbose': 'true'
-        }.items()
-    )
-    
-
-    spawner_node = TimerAction(
-        period=5.0,
-        actions=[
-            Node(
-                package='warehouse_sim',
-                executable='warehouse_spawner',
-                name='warehouse_object_spawner',
-                output='screen'
-            )
-        ]
-    )
+    pkg_dir = get_package_share_directory('warehouse_sim')
+    world_file = os.path.join(pkg_dir, 'worlds', 'warehouse_empty.world')
     
     return LaunchDescription([
-        gazebo,
-        spawner_node
+        # Launch Gazebo server
+        ExecuteProcess(
+            cmd=['gzserver', world_file, '--verbose',
+                 '-s', 'libgazebo_ros_init.so',
+                 '-s', 'libgazebo_ros_factory.so',
+                 '-s', 'libgazebo_ros_force_system.so'],
+            output='screen'
+        ),
+        
+        # Launch Gazebo client
+        ExecuteProcess(
+            cmd=['gzclient', '--verbose'],
+            output='screen'
+        ),
+        
+        # Wait 5 seconds then launch spawner
+        TimerAction(
+            period=5.0,
+            actions=[
+                Node(
+                    package='warehouse_sim',
+                    executable='warehouse_spawner',
+                    name='warehouse_spawner',
+                    output='screen'
+                )
+            ]
+        ),
     ])
