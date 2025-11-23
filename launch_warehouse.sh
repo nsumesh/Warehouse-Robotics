@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-cd ~/MSML642FinalProject
+cd ~/MSML_642_FinalProject
 source install/setup.bash
 
 WORLD_FILE=$(ros2 pkg prefix warehouse_sim)/share/warehouse_sim/worlds/warehouse_empty.world

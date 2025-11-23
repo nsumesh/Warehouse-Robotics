@@ -489,20 +489,222 @@ class WarehouseObjectSpawner(Node):
         self.get_logger().info("  - High shelf boxes (1.5m): Very challenging")
         self.get_logger().info("  - Pallet boxes (0.15m): Slightly elevated")
         self.get_logger().info("  - Scattered boxes: Various positions")
+    # def spawn_clustered_warehouse(self):
+    #   """
+    #   Create a realistic warehouse using 3 natural clusters:
+    #   - Cluster A: North dense storage
+    #   - Cluster B: Center racks (symmetrical)
+    #   - Cluster C: South mixed shelves + pallets
+    #   """
+    #   self.get_logger().info("Spawning clustered warehouse layout...")
+
+    #   # ============= CLUSTER A (North storage zone) =============
+    #   clusterA_origin = (0, 8)   # centered, y=8
+    #   clusterA_rows = 2
+    #   clusterA_cols = 4
+    #   shelf_width = 1.2
+    #   spacing_x = 2.0
+    #   spacing_y = 1.5
+
+    #   for r in range(clusterA_rows):
+    #       for c in range(clusterA_cols):
+    #           x = clusterA_origin[0] + (c - clusterA_cols/2) * spacing_x
+    #           y = clusterA_origin[1] + r * spacing_y
+
+    #           shelf_sdf = self.generate_shelf_sdf(
+    #               width=shelf_width, depth=0.45, height=1.7, shelf_height=1.0
+    #           )
+
+    #           name = f"clusterA_shelf_{r}_{c}"
+    #           self.spawn_object(name, shelf_sdf, x, y, 0)
+
+    #           # Add boxes on this shelf
+    #           for b in range(3):
+    #               box_type = random.choice(['small', 'medium', 'rectangular'])
+    #               config = random.choice([
+    #                   ([0.12,0.12,0.12],0.4,[0.9,0.3,0.3,1]),
+    #                   ([0.15,0.15,0.15],0.5,[0.3,0.7,0.9,1]),
+    #                   ([0.25,0.15,0.10],0.6,[0.9,0.7,0.2,1])
+    #               ])
+    #               box_x = x - 0.3 + b * 0.3
+    #               box_y = y
+    #               box_z = 1.0 + config[0][2]/2 + 0.01
+
+    #               sdf = self.generate_box_sdf(config[0], config[1], config[2])
+    #               self.spawn_object(f"clusterA_box_{r}_{c}_{b}", sdf, box_x, box_y, box_z)
+
+
+
+    #   # ============= CLUSTER B (Center island racks) =============
+    #   clusterB_positions = [
+    #       (-4, 0), (0, 0), (4, 0),
+    #       (-4, -2), (0, -2), (4, -2)
+    #   ]
+
+    #   for idx, (x, y) in enumerate(clusterB_positions):
+    #       shelf_sdf = self.generate_shelf_sdf(
+    #           width=1.0, depth=0.40, height=1.3, shelf_height=0.9
+    #       )
+    #       self.spawn_object(f"clusterB_shelf_{idx}", shelf_sdf, x, y, 0)
+
+    #       # Boxes on shelves
+    #       for b in range(2):
+    #           size = [0.15, 0.15, 0.12]
+    #           mass = 0.4
+    #           color = [0.6, 0.6, 0.9, 1]
+    #           z = 0.9 + size[2]/2 + 0.01
+    #           bx = x - 0.2 + b*0.3
+    #           by = y
+
+    #           sdf = self.generate_box_sdf(size, mass, color)
+    #           self.spawn_object(f"clusterB_box_{idx}_{b}", sdf, bx, by, z)
+
+
+
+    #   # ============= CLUSTER C (South zone: mixed storage + pallets) =============
+    #   clusterC_shelves = [
+    #       (-5, -7), (-3, -7), (-1, -7), (1, -7), (3, -7)
+    #   ]
+
+    #   for idx, (x, y) in enumerate(clusterC_shelves):
+    #       shelf_sdf = self.generate_shelf_sdf(
+    #           width=1.4, depth=0.45, height=1.6, shelf_height=1.1
+    #       )
+    #       self.spawn_object(f"clusterC_shelf_{idx}", shelf_sdf, x, y, 0)
+
+    #   # Pallet zone
+    #   pallet_spots = [
+    #       (-4, -9), (-2, -9), (2, -9), (4, -9)
+    #   ]
+
+    #   for idx, (x, y) in enumerate(pallet_spots):
+    #       pallet_sdf = """
+    #   <sdf version='1.6'>
+    #   <model name='pallet'>
+    #   <static>true</static>
+    #   <link name='link'>
+    #   <visual name='v'><geometry><box><size>1 1 0.15</size></box></geometry></visual>
+    #   <collision name='c'><geometry><box><size>1 1 0.15</size></box></geometry></collision>
+    #   </link>
+    #   </model>
+    #   </sdf>
+    #   """
+    #       self.spawn_object(f"clusterC_pallet_{idx}", pallet_sdf, x, y, 0.075)
+
+    #       # Boxes on pallet
+    #       for b in range(3):
+    #           size = [0.2, 0.2, 0.18]
+    #           mass = 0.7
+    #           color = [0.8, 0.5, 0.2, 1]
+    #           bx = x - 0.25 + (b * 0.25)
+    #           by = y
+    #           bz = 0.15 + size[2]/2 + 0.01
+
+    #           sdf = self.generate_box_sdf(size, mass, color)
+    #           self.spawn_object(f"clusterC_pallet_box_{idx}_{b}", sdf, bx, by, bz)
+
+
+
+    #   self.get_logger().info("Clustered warehouse created successfully!")
+    def spawn_warehouse_lanes(self):
+        self.get_logger().info("Spawning lane-based warehouse layout...")
+
+        # Lane configuration
+        lane_x_positions = [-4.0, 0.0, 4.0]   # three aisles
+        num_shelves_per_lane = 6
+        start_y = -6.0
+        spacing_y = 2.4
+
+        shelf_width = 1.4
+        shelf_depth = 0.45
+        shelf_height = 1.6
+        shelf_board_z = 1.1   # height of the shelf surface
+
+        # Simple box config for shelf boxes
+        box_size = [0.18, 0.18, 0.16]
+        box_mass = 0.6
+        box_color = [0.9, 0.6, 0.2, 1.0]
+
+        # ----- Shelves forming lanes -----
+        for lane_idx, x in enumerate(lane_x_positions):
+            for i in range(num_shelves_per_lane):
+                y = start_y + i * spacing_y
+
+                shelf_sdf = self.generate_shelf_sdf(
+                    width=shelf_width,
+                    depth=shelf_depth,
+                    height=shelf_height,
+                    shelf_height=shelf_board_z,
+                )
+
+                shelf_name = f"lane{lane_idx}_shelf_{i}"
+                # yaw = 0 → shelves extend along +x (like what you already have)
+                self.spawn_object(shelf_name, shelf_sdf, x, y, 0.0, yaw=0.0)
+
+                # place 2–3 boxes on each shelf
+                num_boxes = 3
+                for b in range(num_boxes):
+                    bx = x - shelf_width / 2 + 0.3 + b * 0.35
+                    by = y
+                    bz = shelf_board_z + box_size[2] / 2 + 0.01
+
+                    sdf = self.generate_box_sdf(box_size, box_mass, box_color)
+                    box_name = f"lane{lane_idx}_shelfbox_{i}_{b}"
+                    self.spawn_object(box_name, sdf, bx, by, bz)
+
+        # ----- Pallet zone at one end of the lanes -----
+        pallet_y = -9.0
+        pallet_x_positions = [-4.0, 0.0, 4.0]
+
+        for idx, x in enumerate(pallet_x_positions):
+            pallet_sdf = """<?xml version='1.0'?>
+        <sdf version='1.6'>
+        <model name='pallet'>
+        <static>true</static>
+        <link name='link'>
+        <collision name='collision'>
+        <geometry><box><size>1.0 1.0 0.15</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+        <geometry><box><size>1.0 1.0 0.15</size></box></geometry>
+        <material>
+          <ambient>0.7 0.7 0.7 1</ambient>
+          <diffuse>0.7 0.7 0.7 1</diffuse>
+        </material>
+        </visual>
+        </link>
+        </model>
+        </sdf>
+        """
+            self.spawn_object(f"lane_pallet_{idx}", pallet_sdf, x, pallet_y, 0.075)
+
+            # Boxes on pallet
+            for b in range(2):
+                size = [0.25, 0.20, 0.18]
+                mass = 0.8
+                color = [0.8, 0.5, 0.2, 1]
+                bx = x - 0.20 + b * 0.4
+                by = pallet_y
+                bz = 0.15 + size[2] / 2 + 0.01
+
+                sdf = self.generate_box_sdf(size, mass, color)
+                self.spawn_object(f"lane_pallet_box_{idx}_{b}", sdf, bx, by, bz)
+
+        self.get_logger().info("Lane-based warehouse created successfully!")
+
 
 
 def main(args=None):
     rclpy.init(args=args)
     
     spawner = WarehouseObjectSpawner()
-    
     # Optional: Clear existing objects
     spawner.get_logger().info("Clearing existing objects...")
     spawner.clear_all_objects()
     time.sleep(1)
     
     # Spawn warehouse environment
-    spawner.spawn_warehouse_environment()
+    spawner.spawn_warehouse_lanes()
     
     spawner.get_logger().info("Warehouse setup complete!")
     
