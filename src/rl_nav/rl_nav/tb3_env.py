@@ -7,7 +7,7 @@ from .reset_utils import ResetClient, random_start
 
 OBS_SAMPLES = 60
 MAX_RANGE = 3.5
-GOAL = np.array([2.5, 0.0], dtype=np.float32)
+GOAL = np.array([-4.0, 6.0], dtype=np.float32)
 
 class TB3Env(Node):
     def __init__(self):

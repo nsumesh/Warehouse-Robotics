@@ -6,8 +6,8 @@ from geometry_msgs.msg import Twist
 import random, math
 
 def random_start():
-    x = random.uniform(-1.0, 1.0)
-    y = random.uniform(-1.0, 1.0)
+    x = random.uniform(-10.0, -6.0)
+    y = random.uniform(-10.0, -6.0)
     yaw = random.uniform(-math.pi, math.pi)
     return x, y, yaw
 
