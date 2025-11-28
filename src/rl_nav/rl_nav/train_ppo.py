@@ -68,37 +68,52 @@ from gazebo_msgs.msg import EntityState
 import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import PPO
+import torch
 
 
 # -------------------------------------------------------------------
 # CONFIG: coordinates & curriculum
 # -------------------------------------------------------------------
+# ASSUMPTIONS FOR STABLE LEARNING:
+# 1. Stage 1: Very small area, very short goals (0.5-1.0m) - empty corridor
+# 2. Stage 2: Slightly larger area, medium goals (1.5-2.5m) - minimal clutter
+# 3. Stage 3: Full warehouse area, longer goals (3-5m) - with clutter
 
-# Approximate bottom-aisle spawn (update with /odom if needed)
-STAGE1_SX = 2.04      # center of corridor in x
-STAGE1_SY = -7.3     # bottom aisle y  (adjust if needed)
+# Stage 1: VERY EASY - small area, short straight goals
+# NOTE: Shelves are at x=-4, 0, 4. Use clear aisle between shelves.
+# Aisle between x=-4 and x=0 is at x=-2, or between x=0 and x=4 is at x=2
+STAGE1_SX = -2.0      # clear aisle between shelves (or use 2.0)
+STAGE1_SY = 0.0       # start in middle of aisle (shelves at y=-6 to y=6)
+STAGE1_AREA_SIZE = 1.5  # 1.5m x 1.5m area for Stage 1 (smaller to avoid shelves)
 
-# Stage 1 goal distance straight ahead (in meters)
-STAGE1_GOAL_MIN = 1.2
-STAGE1_GOAL_MAX = 1.6
+# Stage 1 goal distance - VERY SHORT for easy learning
+STAGE1_GOAL_MIN = 0.5   # 0.5m minimum (very easy)
+STAGE1_GOAL_MAX = 1.0   # 1.0m maximum (still easy)
 
-# Stage 2 band (medium difficulty corridor)
-STAGE2_SX_MIN = -0.7
-STAGE2_SX_MAX = 0.7
-STAGE2_SY_MIN = -6.8
-STAGE2_SY_MAX = -5.6
+# Stage 2: Medium difficulty - use clear aisles between shelves
+# Shelves at x=-4, 0, 4. Clear aisles at x=-2, 2, and also x=-6, 6
+STAGE2_SX_MIN = -2.5  # clear aisle area
+STAGE2_SX_MAX = 2.5   # can use both aisles
+STAGE2_SY_MIN = -3.0  # avoid shelf rows (shelves at y=-6, -3.6, -1.2, 1.2, 3.6, 6.0)
+STAGE2_SY_MAX = 3.0
+STAGE2_GOAL_MIN = 1.5
+STAGE2_GOAL_MAX = 2.5
 
-# Stage 3 region (wider, further goals)
-STAGE3_SX_MIN = -1.0
-STAGE3_SX_MAX = 1.0
-STAGE3_SY_MIN = -9.5
-STAGE3_SY_MAX = -7.0
+# Stage 3: Full warehouse - use all clear areas and navigate around shelves
+# Shelves span from y=-6 to y=6, with spacing 2.4
+# Clear areas: between shelves and at edges
+STAGE3_SX_MIN = -5.0  # wider area including edges
+STAGE3_SX_MAX = 5.0
+STAGE3_SY_MIN = -8.0  # include pallet area at y=-9
+STAGE3_SY_MAX = 7.0   # above top shelves
+STAGE3_GOAL_MIN = 3.0
+STAGE3_GOAL_MAX = 5.0
 
-# Curriculum thresholds
-MIN_EPISODES_STAGE1 = 10
-MIN_EPISODES_STAGE2 = 12
-STAGE1_SUCCESS_THRESHOLD = 0.75
-STAGE2_SUCCESS_THRESHOLD = 0.80
+# Curriculum thresholds - more lenient for Stage 1
+MIN_EPISODES_STAGE1 = 15  # Need more episodes to learn basics
+MIN_EPISODES_STAGE2 = 20
+STAGE1_SUCCESS_THRESHOLD = 0.70  # Lower threshold to progress faster
+STAGE2_SUCCESS_THRESHOLD = 0.75
 
 
 # -------------------------------------------------------------
@@ -150,9 +165,10 @@ def spawn_tb3(node: Node) -> bool:
     req.robot_namespace = ""
     req.reference_frame = "world"
 
-    # Initial pose = what you measured from Gazebo (/odom)
-    req.initial_pose.position.x = 2.04
-    req.initial_pose.position.y = -7.30
+    # Initial pose = start in clear aisle for Stage 1 (between shelves)
+    # Shelves are at x=-4, 0, 4, so use x=-2 or x=2 for clear aisle
+    req.initial_pose.position.x = -2.0
+    req.initial_pose.position.y = 0.0
     req.initial_pose.position.z = 0.01  # small offset above ground
 
     # Orientation from your z, w (yaw ≈ 0)
@@ -224,16 +240,20 @@ class Tb3Env(Node):
         self.cumulative_reward = 0.0
 
         self.step_time = 0.15    # seconds per RL step
-        self.max_steps = 200     # max steps per episode
+        self.max_steps = 300     # increased for longer goals
 
-        # Discrete actions (v, w)
+        # Discrete actions (v, w) - slightly slower for more control
         self.actions = [
-            (0.15,  0.8),   # forward + left
+            (0.12,  0.6),   # forward + left (slower turn)
             (0.15,  0.0),   # forward
-            (0.15, -0.8),   # forward + right
-            (0.00,  0.8),   # rotate left
-            (0.00, -0.8),   # rotate right
+            (0.12, -0.6),   # forward + right (slower turn)
+            (0.00,  0.6),   # rotate left (slower)
+            (0.00, -0.6),   # rotate right (slower)
         ]
+        
+        # For oscillation detection
+        self.recent_positions = deque(maxlen=10)  # track last 10 positions
+        self.recent_actions = deque(maxlen=5)     # track last 5 actions
 
         # --- Curriculum state ---
         self.stage = 1
@@ -310,46 +330,62 @@ class Tb3Env(Node):
     # ---------------------------------------------------------
     def _sample_stage1(self):
         """
-        Stage 1: VERY EASY straight corridor near the measured pose.
-        Start near (2.04, -7.30), facing +X, goal 1.2–1.6 m ahead in +X.
+        Stage 1: VERY EASY - small area, very short goals.
+        ASSUMPTION: Empty corridor, no obstacles.
         """
-        base_x = 2.04
-        base_y = -7.30
+        # Start in small area around origin
+        sx = random.uniform(-STAGE1_AREA_SIZE/2, STAGE1_AREA_SIZE/2)
+        sy = random.uniform(-STAGE1_AREA_SIZE/2, STAGE1_AREA_SIZE/2)
+        yaw = random.uniform(-0.2, 0.2)  # small random orientation
 
-        # Small noise around start pose
-        sx = base_x + random.uniform(-0.1, 0.1)
-        sy = base_y + random.uniform(-0.05, 0.05)
-        yaw = 0.0 + random.uniform(-0.05, 0.05)  # almost straight in +X
-
-        # Goal: straight ahead in +X
-        gx = sx + random.uniform(1.2, 1.6)
-        gy = sy + random.uniform(-0.05, 0.05)
+        # Goal: very close, mostly forward
+        goal_dist = random.uniform(STAGE1_GOAL_MIN, STAGE1_GOAL_MAX)
+        goal_angle = random.uniform(-0.3, 0.3)  # small angle variation
+        
+        gx = sx + goal_dist * math.cos(yaw + goal_angle)
+        gy = sy + goal_dist * math.sin(yaw + goal_angle)
 
         return (sx, sy, yaw), (gx, gy)
 
     def _sample_stage2(self):
         """
-        Stage 2: medium runs in central aisle.
+        Stage 2: medium runs - slightly larger area, medium goals.
         """
         sx = random.uniform(STAGE2_SX_MIN, STAGE2_SX_MAX)
         sy = random.uniform(STAGE2_SY_MIN, STAGE2_SY_MAX)
-        yaw = math.pi / 2.0 + random.uniform(-0.25, 0.25)
+        yaw = random.uniform(0, 2 * math.pi)  # any direction
 
-        gx = random.uniform(STAGE2_SX_MIN, STAGE2_SX_MAX)
-        gy = sy + random.uniform(2.0, 3.0)
+        # Goal at medium distance
+        goal_dist = random.uniform(STAGE2_GOAL_MIN, STAGE2_GOAL_MAX)
+        goal_angle = random.uniform(0, 2 * math.pi)
+        
+        gx = sx + goal_dist * math.cos(goal_angle)
+        gy = sy + goal_dist * math.sin(goal_angle)
+        
+        # Keep goal within Stage 2 bounds
+        gx = max(STAGE2_SX_MIN, min(STAGE2_SX_MAX, gx))
+        gy = max(STAGE2_SY_MIN, min(STAGE2_SY_MAX, gy))
 
         return (sx, sy, yaw), (gx, gy)
 
     def _sample_stage3(self):
         """
-        Stage 3: longer runs, broader area.
+        Stage 3: longer runs in full warehouse area.
         """
         sx = random.uniform(STAGE3_SX_MIN, STAGE3_SX_MAX)
         sy = random.uniform(STAGE3_SY_MIN, STAGE3_SY_MAX)
-        yaw = math.pi / 2.0 + random.uniform(-0.4, 0.4)
+        yaw = random.uniform(0, 2 * math.pi)
 
-        gx = random.uniform(STAGE3_SX_MIN, STAGE3_SX_MAX)
-        gy = random.uniform(3.0, 7.0)
+        # Goal at longer distance
+        goal_dist = random.uniform(STAGE3_GOAL_MIN, STAGE3_GOAL_MAX)
+        goal_angle = random.uniform(0, 2 * math.pi)
+        
+        gx = sx + goal_dist * math.cos(goal_angle)
+        gy = sy + goal_dist * math.sin(goal_angle)
+        
+        # Keep goal within Stage 3 bounds
+        gx = max(STAGE3_SX_MIN, min(STAGE3_SX_MAX, gx))
+        gy = max(STAGE3_SY_MIN, min(STAGE3_SY_MAX, gy))
 
         return (sx, sy, yaw), (gx, gy)
 
@@ -394,7 +430,8 @@ class Tb3Env(Node):
         # Log previous episode & update curriculum
         if self.episode_steps > 0 and self.prev_dist is not None:
             final_dist = float(np.linalg.norm(self.goal - self.pose[:2]))
-            success = int(final_dist < 0.4 and not self.collision)
+            # Use same success threshold as in step() function
+            success = int(final_dist < 0.3 and not self.collision)
 
             # Update success history
             self.recent_successes.append(success)
@@ -458,6 +495,8 @@ class Tb3Env(Node):
         self.cumulative_reward = 0.0
         self.collision = False
         self.min_obstacle_dist = self.max_range
+        self.recent_positions.clear()
+        self.recent_actions.clear()
 
         # Sample curriculum start/goal
         (sx, sy, syaw), (gx, gy) = self._choose_start_goal()
@@ -495,13 +534,16 @@ class Tb3Env(Node):
 
     def step(self, a_idx: int):
         """
-        Apply discrete action, step the sim, compute SIMPLE reward.
-        SIMPLE reward:
-            r =  2.0 * (prev_dist - dist)      # progress
-                 - 0.01                        # time penalty
-                 - 0.3 * heading_error         # heading shaping
-                 - 20.0 if collision
-                 + 20.0 if success
+        Apply discrete action, step the sim, compute IMPROVED reward.
+        
+        IMPROVED reward function:
+            r =  5.0 * (prev_dist - dist)      # higher progress reward
+                 - 0.005                       # smaller time penalty
+                 - 0.2 * heading_error         # reduced heading penalty
+                 - 0.5 * oscillation_penalty   # NEW: penalize oscillation
+                 - 1.0 * near_miss_penalty     # NEW: penalize getting too close
+                 - 30.0 if collision           # larger collision penalty
+                 + 50.0 if success             # larger success bonus
         """
         # Apply action
         v, w = self.actions[int(a_idx)]
@@ -522,6 +564,10 @@ class Tb3Env(Node):
         dx, dy = (self.goal - self.pose[:2])
         dist = float(math.hypot(dx, dy))
 
+        # Track position for oscillation detection
+        self.recent_positions.append((self.pose[0], self.pose[1]))
+        self.recent_actions.append(int(a_idx))
+
         # Progress (positive if getting closer)
         if self.prev_dist is None:
             delta = 0.0
@@ -529,32 +575,64 @@ class Tb3Env(Node):
             delta = self.prev_dist - dist
         self.prev_dist = dist
 
-        # Base reward: progress + small time penalty
-        r = 2.0 * delta
-        r -= 0.01
+        # Base reward: higher progress reward
+        r = 5.0 * delta  # Increased from 2.0 to 5.0
+        r -= 0.005  # Reduced time penalty
 
         # Heading shaping: encourage facing the goal direction
         goal_heading = math.atan2(dy, dx)
         heading_error = abs(angle_diff(goal_heading, self.pose[2]))
-        r -= 0.3 * heading_error
+        r -= 0.2 * heading_error  # Reduced from 0.3
+
+        # NEW: Oscillation detection - penalize going back and forth
+        oscillation_penalty = 0.0
+        if len(self.recent_positions) >= 5:
+            # Check if robot is moving back and forth
+            positions = list(self.recent_positions)
+            total_movement = 0.0
+            for i in range(1, len(positions)):
+                dx_pos = positions[i][0] - positions[i-1][0]
+                dy_pos = positions[i][1] - positions[i-1][1]
+                total_movement += math.hypot(dx_pos, dy_pos)
+            
+            # If robot moved a lot but didn't get closer, it's oscillating
+            if total_movement > 0.5 and delta < 0.05:
+                oscillation_penalty = 1.0
+        
+        r -= 0.5 * oscillation_penalty
+
+        # NEW: Near-miss penalty - penalize getting too close to obstacles
+        near_miss_penalty = 0.0
+        if self.min_obstacle_dist < 0.5:  # within 0.5m of obstacle
+            near_miss_penalty = (0.5 - self.min_obstacle_dist) / 0.5  # 0 to 1
+        r -= 1.0 * near_miss_penalty
 
         done = False
         success = False
 
-        # Collision penalty
+        # Collision penalty - larger
         if self.collision:
-            r -= 20.0
+            r -= 30.0  # Increased from 20.0
             done = True
 
-        # Success bonus
-        if (dist < 0.4) and (not self.collision):
-            r += 20.0
+        # Success bonus - larger and distance-based
+        success_threshold = 0.3  # Tighter success threshold
+        if (dist < success_threshold) and (not self.collision):
+            # Bonus scales with how close we got
+            distance_bonus = (success_threshold - dist) / success_threshold
+            r += 50.0 + 20.0 * distance_bonus  # Base 50 + up to 20 more
             success = True
             done = True
 
         # Max steps → end episode
         if self.episode_steps >= self.max_steps:
             done = True
+            # Small penalty for timeout (but not as harsh as collision)
+            if dist > success_threshold:
+                r -= 5.0
+
+        # Clip reward to prevent extreme values
+        r = max(-50.0, min(100.0, r))
 
         self.cumulative_reward += r
 
@@ -563,6 +641,8 @@ class Tb3Env(Node):
             "stage": self.stage,
             "episode_steps": self.episode_steps,
             "success": success,
+            "oscillation": oscillation_penalty,
+            "near_miss": near_miss_penalty,
         }
         return obs, r, done, info
 
@@ -628,17 +708,26 @@ def main():
 
     env = GymTb3(node)
 
+    # Improved PPO hyperparameters for stable learning
     model = PPO(
         "MlpPolicy",
         env,
         verbose=1,
         tensorboard_log=args.logdir,
-        n_steps=512,                 # longer rollout for better gradient estimates
-        batch_size=128,
+        n_steps=256,                 # shorter rollout for faster updates (was 512)
+        batch_size=64,              # smaller batch for more frequent updates (was 128)
+        n_epochs=10,                 # more epochs per update for better learning
         learning_rate=3e-4,
-        gamma=0.995,                 # slightly longer horizon
-        gae_lambda=0.98,
-        policy_kwargs=dict(net_arch=[128, 128]),
+        gamma=0.99,                  # standard discount (was 0.995)
+        gae_lambda=0.95,             # standard GAE lambda (was 0.98)
+        clip_range=0.2,              # PPO clip range
+        ent_coef=0.01,               # entropy coefficient for exploration
+        vf_coef=0.5,                 # value function coefficient
+        max_grad_norm=0.5,           # gradient clipping
+        policy_kwargs=dict(
+            net_arch=[64, 64],       # smaller network for faster training (was [128, 128])
+            activation_fn=torch.nn.Tanh,  # Tanh activation for bounded outputs
+        ),
     )
 
     model.learn(total_timesteps=args.timesteps)
