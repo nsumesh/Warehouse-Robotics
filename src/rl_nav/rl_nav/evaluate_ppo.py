@@ -11,11 +11,14 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
+    # Try to find model in repo ppo_runs directory (relative to current working dir)
+    default_model = os.path.abspath("ppo_runs/tb3_ppo.zip")
+    
     parser.add_argument(
         "--model",
         type=str,
-        default=os.path.expanduser("~/ppo_runs/tb3_ppo.zip"),
-        help="Path to trained PPO model .zip file",
+        default=default_model,
+        help="Path to trained PPO model .zip file (default: ppo_runs/tb3_ppo.zip in repo)",
     )
     parser.add_argument("--episodes", type=int, default=10)
     args = parser.parse_args()

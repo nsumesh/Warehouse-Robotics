@@ -86,9 +86,16 @@ class PPOController(Node):
         # ---------------------
         #  Load PPO model
         # ---------------------
-        MODEL_PATH = os.path.expanduser(
-            "~/MSML_642_FinalProject/ppo_runs/tb3_ppo.zip"
-        )
+        # Try to find model in repo ppo_runs directory (relative to current working dir)
+        model_relative = os.path.abspath("ppo_runs/tb3_ppo.zip")
+        model_home = os.path.expanduser("~/MSML_642_FinalProject/ppo_runs/tb3_ppo.zip")
+        
+        if os.path.exists(model_relative):
+            MODEL_PATH = model_relative
+        elif os.path.exists(model_home):
+            MODEL_PATH = model_home
+        else:
+            MODEL_PATH = model_relative  # Use repo path as default
         if not os.path.exists(MODEL_PATH):
             self.get_logger().error(
                 f"PPO model not found.\nExpected at: {MODEL_PATH}\n"

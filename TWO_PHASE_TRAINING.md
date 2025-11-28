@@ -21,7 +21,7 @@ source install/setup.bash
 # Train Stage 1 (will save model when done)
 ros2 run rl_nav train_ppo \
     --timesteps 10000 \
-    --logdir ~/ppo_runs \
+    --logdir ppo_runs \
     --save-name tb3_ppo_stage1
 ```
 
@@ -43,7 +43,7 @@ tensorboard --logdir ~/ppo_runs
 ### Step 3: Verify Stage 1 Model
 ```bash
 # Check that model was saved
-ls -lh ~/ppo_runs/tb3_ppo_stage1.zip
+ls -lh ppo_runs/tb3_ppo_stage1.zip
 
 # Should see file with reasonable size (few MB)
 ```
@@ -61,10 +61,13 @@ ls -lh ~/ppo_runs/tb3_ppo_stage1.zip
 # Terminal 2: Continue training
 ros2 run rl_nav train_ppo \
     --timesteps 20000 \
-    --logdir ~/ppo_runs \
-    --resume ~/ppo_runs/tb3_ppo_stage1.zip \
-    --save-name tb3_ppo_stage2
+    --logdir ppo_runs \
+    --resume ppo_runs/tb3_ppo_stage1.zip \
+    --save-name tb3_ppo_stage2 \
+    --start-stage 2
 ```
+
+**Important**: Use `--start-stage 2` to start at Stage 2 curriculum. Without this, training will restart at Stage 1 even though you're resuming from a checkpoint.
 
 **What happens:**
 - Loads `tb3_ppo_stage1.zip` checkpoint
@@ -91,7 +94,7 @@ set -e
 cd ~/MSML_642_FinalProject
 source install/setup.bash
 
-LOGDIR=~/ppo_runs
+LOGDIR=ppo_runs
 STAGE1_MODEL="${LOGDIR}/tb3_ppo_stage1.zip"
 STAGE2_MODEL="${LOGDIR}/tb3_ppo_stage2.zip"
 
@@ -134,7 +137,8 @@ ros2 run rl_nav train_ppo \
     --timesteps 20000 \
     --logdir "$LOGDIR" \
     --resume "$STAGE1_MODEL" \
-    --save-name tb3_ppo_stage2
+    --save-name tb3_ppo_stage2 \
+    --start-stage 2
 
 if [ ! -f "$STAGE2_MODEL" ]; then
     echo "ERROR: Stage 2 model not saved!"
@@ -173,7 +177,7 @@ ros2 run rl_nav train_ppo --timesteps 30000
 ### Evaluate Stage 1 Model
 ```bash
 # Load and test Stage 1 model
-ros2 run rl_nav evaluate_ppo --model ~/ppo_runs/tb3_ppo_stage1.zip
+ros2 run rl_nav evaluate_ppo --model ppo_runs/tb3_ppo_stage1.zip
 ```
 
 ### Use Stage 2 Model for Inference
@@ -191,11 +195,11 @@ ros2 run rl_nav ppo_controller_node
 ### Checkpoint Not Found
 ```bash
 # Check if model exists
-ls -lh ~/ppo_runs/tb3_ppo_stage1.zip
+ls -lh ppo_runs/tb3_ppo_stage1.zip
 
-# Use absolute path if needed
+# Use relative path (default)
 ros2 run rl_nav train_ppo \
-    --resume /home/nsumesh/ppo_runs/tb3_ppo_stage1.zip
+    --resume ppo_runs/tb3_ppo_stage1.zip
 ```
 
 ### Model Size Issues

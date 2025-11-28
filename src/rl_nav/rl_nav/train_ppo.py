@@ -267,20 +267,13 @@ class Tb3Env(Node):
         self.recent_actions = deque(maxlen=5)     # track last 5 actions
 
         # --- Curriculum state ---
-        self.stage = 1
+        self.stage = 1  # Can be overridden by main() when resuming
         self.recent_successes = deque(maxlen=20)
         self.success_streak = 0
 
         # --- Metrics logging ---
-        self.metrics_path = os.path.expanduser(
-            "~/MSML_642_FinalProject/ppo_runs/episode_metrics.csv"
-        )
-        os.makedirs(os.path.dirname(self.metrics_path), exist_ok=True)
-        if not os.path.exists(self.metrics_path):
-            with open(self.metrics_path, "w") as f:
-                f.write(
-                    "episode,stage,steps,final_dist,success,return\n"
-                )
+        # Use relative path in repo (will be set by main() with actual logdir)
+        self.metrics_path = None  # Will be set in main()
 
     # ---------------------------------------------------------
     # Callbacks
@@ -483,6 +476,10 @@ class Tb3Env(Node):
                 )
 
             # Append metrics (use previous stage for logging)
+            if self.metrics_path is None:
+                # Fallback if not set (shouldn't happen, but safety check)
+                self.metrics_path = os.path.join("ppo_runs", "episode_metrics.csv")
+            os.makedirs(os.path.dirname(self.metrics_path), exist_ok=True)
             with open(self.metrics_path, "a") as f:
                 f.write(
                     f"{self.episode_idx},"
@@ -715,14 +712,14 @@ def main():
     parser.add_argument(
         "--logdir",
         type=str,
-        default=os.path.expanduser("~/MSML_642_FinalProject/ppo_runs"),
-        help="Directory for logs and saved models"
+        default="ppo_runs",
+        help="Directory for logs and saved models (relative to repo root, default: ppo_runs)"
     )
     parser.add_argument(
         "--resume",
         type=str,
         default=None,
-        help="Path to checkpoint to resume training from (e.g., ~/ppo_runs/tb3_ppo_stage1.zip)"
+        help="Path to checkpoint to resume training from (e.g., ppo_runs/tb3_ppo_stage1.zip)"
     )
     parser.add_argument(
         "--save-name",
@@ -730,10 +727,47 @@ def main():
         default="tb3_ppo",
         help="Base name for saved model (default: tb3_ppo)"
     )
+    parser.add_argument(
+        "--start-stage",
+        type=int,
+        default=None,
+        help="Curriculum stage to start at (1, 2, or 3). If not specified and resuming, will try to infer from checkpoint name or start at Stage 2"
+    )
     args = parser.parse_args()
 
     rclpy.init()
+    
+    # Resolve logdir to absolute path (relative to current working directory)
+    if not os.path.isabs(args.logdir):
+        # Use current working directory (should be repo root when running from there)
+        args.logdir = os.path.abspath(args.logdir)
+    
+    os.makedirs(args.logdir, exist_ok=True)
+    
     node = Tb3Env()
+    
+    # Set metrics path in node
+    node.metrics_path = os.path.join(args.logdir, "episode_metrics.csv")
+    if not os.path.exists(node.metrics_path):
+        with open(node.metrics_path, "w") as f:
+            f.write("episode,stage,steps,final_dist,success,return\n")
+    
+    # Set starting stage if specified or if resuming
+    if args.start_stage is not None:
+        if args.start_stage < 1 or args.start_stage > 3:
+            node.get_logger().error(f"Invalid start-stage: {args.start_stage}. Must be 1, 2, or 3.")
+            rclpy.shutdown()
+            return
+        node.stage = args.start_stage
+        node.get_logger().info(f"Starting at curriculum Stage {args.start_stage}")
+    elif args.resume:
+        # If resuming but no stage specified, default to Stage 2
+        # (assuming Stage 1 was completed in previous training)
+        node.stage = 2
+        node.get_logger().info(
+            "Resuming training: Starting at Stage 2 (assuming Stage 1 was completed). "
+            "Use --start-stage to override."
+        )
 
     # Spawn TB3 once (world must already be running)
     if not spawn_tb3(node):
@@ -743,14 +777,24 @@ def main():
 
     env = GymTb3(node)
 
-    os.makedirs(args.logdir, exist_ok=True)
-
     # Load existing model or create new one
-    if args.resume and os.path.exists(os.path.expanduser(args.resume)):
-        resume_path = os.path.expanduser(args.resume)
-        node.get_logger().info(f"Loading checkpoint from: {resume_path}")
-        model = PPO.load(resume_path, env=env)
-        node.get_logger().info("Resuming training from checkpoint")
+    if args.resume:
+        # Resolve resume path (can be relative or absolute)
+        if not os.path.isabs(args.resume):
+            # Try relative to logdir first, then current working directory
+            resume_path = os.path.join(args.logdir, args.resume)
+            if not os.path.exists(resume_path):
+                resume_path = os.path.abspath(args.resume)
+        else:
+            resume_path = os.path.expanduser(args.resume)
+        
+        if os.path.exists(resume_path):
+            node.get_logger().info(f"Loading checkpoint from: {resume_path}")
+            model = PPO.load(resume_path, env=env)
+            node.get_logger().info("Resuming training from checkpoint")
+        else:
+            node.get_logger().warn(f"Checkpoint not found: {resume_path}. Starting fresh training.")
+            args.resume = None  # Clear resume flag
     else:
         if args.resume:
             node.get_logger().warn(

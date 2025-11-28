@@ -31,13 +31,17 @@ env/
 
 .ipynb_checkpoints/
 
-ppo_runs/
-runs/               
-checkpoints/
-models/
-*.zip                
-*.pt
-*.pth
+# Training outputs - uncomment to ignore, or commit specific models
+# ppo_runs/
+# runs/               
+# checkpoints/
+# models/
+# *.zip                
+# *.pt
+# *.pth
+
+# But keep episode_metrics.csv for tracking
+!ppo_runs/episode_metrics.csv
 
 .vscode/
 .idea/
