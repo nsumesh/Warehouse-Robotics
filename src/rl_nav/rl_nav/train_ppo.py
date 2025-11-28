@@ -87,8 +87,8 @@ STAGE1_SY = 0.0       # start in middle of aisle (shelves at y=-6 to y=6)
 STAGE1_AREA_SIZE = 1.5  # 1.5m x 1.5m area for Stage 1 (smaller to avoid shelves)
 
 # Stage 1 goal distance - VERY SHORT for easy learning
-STAGE1_GOAL_MIN = 0.5   # 0.5m minimum (very easy)
-STAGE1_GOAL_MAX = 1.0   # 1.0m maximum (still easy)
+STAGE1_GOAL_MIN = 0.4   # 0.4m minimum (very easy, almost trivial)
+STAGE1_GOAL_MAX = 0.8   # 0.8m maximum (still easy)
 
 # Stage 2: Medium difficulty - use clear aisles between shelves
 # Shelves at x=-4, 0, 4. Clear aisles at x=-2, 2, and also x=-6, 6
@@ -110,10 +110,10 @@ STAGE3_GOAL_MIN = 3.0
 STAGE3_GOAL_MAX = 5.0
 
 # Curriculum thresholds - more lenient for Stage 1
-MIN_EPISODES_STAGE1 = 15  # Need more episodes to learn basics
-MIN_EPISODES_STAGE2 = 20
-STAGE1_SUCCESS_THRESHOLD = 0.70  # Lower threshold to progress faster
-STAGE2_SUCCESS_THRESHOLD = 0.75
+MIN_EPISODES_STAGE1 = 20  # More episodes to ensure solid learning
+MIN_EPISODES_STAGE2 = 25
+STAGE1_SUCCESS_THRESHOLD = 0.65  # Even lower threshold (60%+ success rate)
+STAGE2_SUCCESS_THRESHOLD = 0.70
 
 
 # -------------------------------------------------------------
@@ -333,14 +333,14 @@ class Tb3Env(Node):
         Stage 1: VERY EASY - small area, very short goals.
         ASSUMPTION: Empty corridor, no obstacles.
         """
-        # Start in small area around origin
-        sx = random.uniform(-STAGE1_AREA_SIZE/2, STAGE1_AREA_SIZE/2)
-        sy = random.uniform(-STAGE1_AREA_SIZE/2, STAGE1_AREA_SIZE/2)
-        yaw = random.uniform(-0.2, 0.2)  # small random orientation
+        # Start in small area around STAGE1_SX, STAGE1_SY (clear aisle)
+        sx = STAGE1_SX + random.uniform(-STAGE1_AREA_SIZE/2, STAGE1_AREA_SIZE/2)
+        sy = STAGE1_SY + random.uniform(-STAGE1_AREA_SIZE/2, STAGE1_AREA_SIZE/2)
+        yaw = random.uniform(-0.15, 0.15)  # even smaller orientation variation
 
-        # Goal: very close, mostly forward
+        # Goal: very close, ALWAYS forward (straight ahead)
         goal_dist = random.uniform(STAGE1_GOAL_MIN, STAGE1_GOAL_MAX)
-        goal_angle = random.uniform(-0.3, 0.3)  # small angle variation
+        goal_angle = random.uniform(-0.15, 0.15)  # very small angle variation (almost straight)
         
         gx = sx + goal_dist * math.cos(yaw + goal_angle)
         gy = sy + goal_dist * math.sin(yaw + goal_angle)
@@ -430,8 +430,8 @@ class Tb3Env(Node):
         # Log previous episode & update curriculum
         if self.episode_steps > 0 and self.prev_dist is not None:
             final_dist = float(np.linalg.norm(self.goal - self.pose[:2]))
-            # Use same success threshold as in step() function
-            success = int(final_dist < 0.3 and not self.collision)
+            # Use same success threshold as in step() function (0.4m)
+            success = int(final_dist < 0.4 and not self.collision)
 
             # Update success history
             self.recent_successes.append(success)
@@ -576,13 +576,14 @@ class Tb3Env(Node):
         self.prev_dist = dist
 
         # Base reward: higher progress reward
-        r = 5.0 * delta  # Increased from 2.0 to 5.0
-        r -= 0.005  # Reduced time penalty
+        r = 8.0 * delta  # Increased from 5.0 to 8.0 for stronger signal
+        r -= 0.003  # Even smaller time penalty
 
         # Heading shaping: encourage facing the goal direction
         goal_heading = math.atan2(dy, dx)
         heading_error = abs(angle_diff(goal_heading, self.pose[2]))
-        r -= 0.2 * heading_error  # Reduced from 0.3
+        # Reduce heading penalty - let robot learn to turn while moving
+        r -= 0.1 * heading_error  # Further reduced from 0.2
 
         # NEW: Oscillation detection - penalize going back and forth
         oscillation_penalty = 0.0
@@ -616,20 +617,26 @@ class Tb3Env(Node):
             done = True
 
         # Success bonus - larger and distance-based
-        success_threshold = 0.3  # Tighter success threshold
+        success_threshold = 0.4  # Slightly more lenient (was 0.3)
         if (dist < success_threshold) and (not self.collision):
             # Bonus scales with how close we got
             distance_bonus = (success_threshold - dist) / success_threshold
             r += 50.0 + 20.0 * distance_bonus  # Base 50 + up to 20 more
             success = True
             done = True
+        # Also give partial credit for getting close (but not perfect)
+        elif dist < 0.6 and not self.collision:
+            # Partial success reward - encourage getting closer
+            r += 10.0 * (0.6 - dist) / 0.6  # Up to 10.0 reward for getting within 0.6m
 
         # Max steps → end episode
         if self.episode_steps >= self.max_steps:
             done = True
-            # Small penalty for timeout (but not as harsh as collision)
-            if dist > success_threshold:
-                r -= 5.0
+            # Penalty for timeout - but less harsh if we got close
+            if dist > 0.6:
+                r -= 10.0  # Penalty for timing out far from goal
+            elif dist > success_threshold:
+                r -= 2.0   # Small penalty if we got close but timed out
 
         # Clip reward to prevent extreme values
         r = max(-50.0, min(100.0, r))
