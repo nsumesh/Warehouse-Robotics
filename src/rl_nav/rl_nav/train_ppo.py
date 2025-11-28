@@ -8,11 +8,18 @@ Workflow
 --------
 1) In one terminal, start the world (NO robot):
 
+   # For Stage 1 (optional - easier learning):
+   ./launch_warehouse_empty.sh
+   
+   # For Stage 2+ (required - introduces obstacles):
    ./launch_warehouse.sh
 
 2) In another terminal, run PPO training:
 
-   ros2 run rl_nav train_ppo -- --timesteps 20000
+   ros2 run rl_nav train_ppo --timesteps 20000
+   
+Note: Stage 1 can train in empty world, but Stage 2+ should use
+      warehouse with objects to learn obstacle avoidance.
 
 This script:
   - Spawns the TB3 once via /spawn_entity.
@@ -75,9 +82,12 @@ import torch
 # CONFIG: coordinates & curriculum
 # -------------------------------------------------------------------
 # ASSUMPTIONS FOR STABLE LEARNING:
-# 1. Stage 1: Very small area, very short goals (0.5-1.0m) - empty corridor
-# 2. Stage 2: Slightly larger area, medium goals (1.5-2.5m) - minimal clutter
-# 3. Stage 3: Full warehouse area, longer goals (3-5m) - with clutter
+# 1. Stage 1: Very small area, very short goals (0.4-0.8m) - EMPTY WORLD (no objects)
+# 2. Stage 2: Slightly larger area, short goals (0.8-1.5m) - WAREHOUSE WITH OBJECTS (learn obstacle avoidance)
+# 3. Stage 3: Full warehouse area, longer goals (3-5m) - WAREHOUSE WITH OBJECTS (full navigation)
+#
+# IMPORTANT: Stage 2 should use launch_warehouse.sh (with objects) to learn obstacle avoidance
+#            while keeping goals short and in clear aisles to avoid overwhelming the agent.
 
 # Stage 1: VERY EASY - small area, short straight goals
 # NOTE: Shelves are at x=-4, 0, 4. Use clear aisle between shelves.
@@ -90,14 +100,15 @@ STAGE1_AREA_SIZE = 1.5  # 1.5m x 1.5m area for Stage 1 (smaller to avoid shelves
 STAGE1_GOAL_MIN = 0.4   # 0.4m minimum (very easy, almost trivial)
 STAGE1_GOAL_MAX = 0.8   # 0.8m maximum (still easy)
 
-# Stage 2: Medium difficulty - use clear aisles between shelves
+# Stage 2: Medium difficulty - GRADUAL increase from Stage 1
+# Use clear aisles between shelves, but keep goals closer initially
 # Shelves at x=-4, 0, 4. Clear aisles at x=-2, 2, and also x=-6, 6
 STAGE2_SX_MIN = -2.5  # clear aisle area
 STAGE2_SX_MAX = 2.5   # can use both aisles
 STAGE2_SY_MIN = -3.0  # avoid shelf rows (shelves at y=-6, -3.6, -1.2, 1.2, 3.6, 6.0)
 STAGE2_SY_MAX = 3.0
-STAGE2_GOAL_MIN = 1.5
-STAGE2_GOAL_MAX = 2.5
+STAGE2_GOAL_MIN = 0.8   # Start closer to Stage 1 (was 1.5)
+STAGE2_GOAL_MAX = 1.5   # Gradual increase (was 2.5)
 
 # Stage 3: Full warehouse - use all clear areas and navigate around shelves
 # Shelves span from y=-6 to y=6, with spacing 2.4
@@ -109,11 +120,11 @@ STAGE3_SY_MAX = 7.0   # above top shelves
 STAGE3_GOAL_MIN = 3.0
 STAGE3_GOAL_MAX = 5.0
 
-# Curriculum thresholds - more lenient for Stage 1
-MIN_EPISODES_STAGE1 = 20  # More episodes to ensure solid learning
-MIN_EPISODES_STAGE2 = 25
-STAGE1_SUCCESS_THRESHOLD = 0.65  # Even lower threshold (60%+ success rate)
-STAGE2_SUCCESS_THRESHOLD = 0.70
+# Curriculum thresholds - more lenient for Stage 1, stricter for Stage 2
+MIN_EPISODES_STAGE1 = 25  # More episodes to ensure solid learning
+MIN_EPISODES_STAGE2 = 30  # More episodes in Stage 2 before advancing
+STAGE1_SUCCESS_THRESHOLD = 0.75  # Higher threshold - ensure mastery (was 0.65)
+STAGE2_SUCCESS_THRESHOLD = 0.70  # Keep same for Stage 2
 
 
 # -------------------------------------------------------------
@@ -349,18 +360,19 @@ class Tb3Env(Node):
 
     def _sample_stage2(self):
         """
-        Stage 2: medium runs - slightly larger area, medium goals.
+        Stage 2: medium runs - slightly larger area, GRADUAL increase in goal distance.
+        Keep goals mostly forward (like Stage 1) but allow more variation.
         """
         sx = random.uniform(STAGE2_SX_MIN, STAGE2_SX_MAX)
         sy = random.uniform(STAGE2_SY_MIN, STAGE2_SY_MAX)
-        yaw = random.uniform(0, 2 * math.pi)  # any direction
+        yaw = random.uniform(-0.3, 0.3)  # Small orientation (not full 360)
 
-        # Goal at medium distance
+        # Goal at medium distance - but mostly forward (like Stage 1)
         goal_dist = random.uniform(STAGE2_GOAL_MIN, STAGE2_GOAL_MAX)
-        goal_angle = random.uniform(0, 2 * math.pi)
+        goal_angle = random.uniform(-0.4, 0.4)  # Mostly forward, not random direction
         
-        gx = sx + goal_dist * math.cos(goal_angle)
-        gy = sy + goal_dist * math.sin(goal_angle)
+        gx = sx + goal_dist * math.cos(yaw + goal_angle)
+        gy = sy + goal_dist * math.sin(yaw + goal_angle)
         
         # Keep goal within Stage 2 bounds
         gx = max(STAGE2_SX_MIN, min(STAGE2_SX_MAX, gx))
@@ -695,12 +707,28 @@ class GymTb3(gym.Env):
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--timesteps", type=int, default=20000)
+    parser = argparse.ArgumentParser(
+        description="Train PPO policy for TurtleBot3 navigation with curriculum learning"
+    )
+    parser.add_argument("--timesteps", type=int, default=20000,
+                        help="Total timesteps to train")
     parser.add_argument(
         "--logdir",
         type=str,
         default=os.path.expanduser("~/MSML_642_FinalProject/ppo_runs"),
+        help="Directory for logs and saved models"
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to checkpoint to resume training from (e.g., ~/ppo_runs/tb3_ppo_stage1.zip)"
+    )
+    parser.add_argument(
+        "--save-name",
+        type=str,
+        default="tb3_ppo",
+        help="Base name for saved model (default: tb3_ppo)"
     )
     args = parser.parse_args()
 
@@ -715,34 +743,50 @@ def main():
 
     env = GymTb3(node)
 
-    # Improved PPO hyperparameters for stable learning
-    model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        tensorboard_log=args.logdir,
-        n_steps=256,                 # shorter rollout for faster updates (was 512)
-        batch_size=64,              # smaller batch for more frequent updates (was 128)
-        n_epochs=10,                 # more epochs per update for better learning
-        learning_rate=3e-4,
-        gamma=0.99,                  # standard discount (was 0.995)
-        gae_lambda=0.95,             # standard GAE lambda (was 0.98)
-        clip_range=0.2,              # PPO clip range
-        ent_coef=0.01,               # entropy coefficient for exploration
-        vf_coef=0.5,                 # value function coefficient
-        max_grad_norm=0.5,           # gradient clipping
-        policy_kwargs=dict(
-            net_arch=[64, 64],       # smaller network for faster training (was [128, 128])
-            activation_fn=torch.nn.Tanh,  # Tanh activation for bounded outputs
-        ),
-    )
+    os.makedirs(args.logdir, exist_ok=True)
+
+    # Load existing model or create new one
+    if args.resume and os.path.exists(os.path.expanduser(args.resume)):
+        resume_path = os.path.expanduser(args.resume)
+        node.get_logger().info(f"Loading checkpoint from: {resume_path}")
+        model = PPO.load(resume_path, env=env)
+        node.get_logger().info("Resuming training from checkpoint")
+    else:
+        if args.resume:
+            node.get_logger().warn(
+                f"Checkpoint not found: {args.resume}. Starting fresh training."
+            )
+        
+        # Improved PPO hyperparameters for stable learning
+        model = PPO(
+            "MlpPolicy",
+            env,
+            verbose=1,
+            tensorboard_log=args.logdir,
+            n_steps=256,                 # shorter rollout for faster updates (was 512)
+            batch_size=64,              # smaller batch for more frequent updates (was 128)
+            n_epochs=10,                 # more epochs per update for better learning
+            learning_rate=3e-4,
+            gamma=0.99,                  # standard discount (was 0.995)
+            gae_lambda=0.95,             # standard GAE lambda (was 0.98)
+            clip_range=0.2,              # PPO clip range
+            ent_coef=0.01,               # entropy coefficient for exploration
+            vf_coef=0.5,                 # value function coefficient
+            max_grad_norm=0.5,           # gradient clipping
+            policy_kwargs=dict(
+                net_arch=[64, 64],       # smaller network for faster training (was [128, 128])
+                activation_fn=torch.nn.Tanh,  # Tanh activation for bounded outputs
+            ),
+        )
+        node.get_logger().info("Starting fresh training")
 
     model.learn(total_timesteps=args.timesteps)
 
-    os.makedirs(args.logdir, exist_ok=True)
-    out = os.path.join(args.logdir, "tb3_ppo.zip")
+    # Save model
+    out = os.path.join(args.logdir, f"{args.save_name}.zip")
     model.save(out)
-    print("Saved policy to", out)
+    node.get_logger().info(f"Saved policy to {out}")
+    print(f"Saved policy to {out}")
 
     rclpy.shutdown()
 
