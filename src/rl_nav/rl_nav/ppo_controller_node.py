@@ -188,13 +188,13 @@ class PPOController(Node):
 
         action, _ = self.model.predict(obs, deterministic=True)
 
-        # MATCH EXACT ACTIONS IN TRAIN_PPO
+        # MATCH EXACT ACTIONS IN TRAIN_PPO (updated to match current training)
         ACTIONS = [
-            (0.15, +0.8),
-            (0.15,  0.0),
-            (0.15, -0.8),
-            (0.00, +0.8),
-            (0.00, -0.8),
+            (0.12,  0.6),   # forward + left (slower turn)
+            (0.15,  0.0),   # forward
+            (0.12, -0.6),   # forward + right (slower turn)
+            (0.00,  0.6),   # rotate left (slower)
+            (0.00, -0.6),   # rotate right (slower)
         ]
 
         v, w = ACTIONS[int(action)]

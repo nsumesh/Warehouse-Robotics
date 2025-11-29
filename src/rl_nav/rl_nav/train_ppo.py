@@ -353,19 +353,21 @@ class Tb3Env(Node):
 
     def _sample_stage2(self):
         """
-        Stage 2: medium runs - slightly larger area, GRADUAL increase in goal distance.
-        Keep goals mostly forward (like Stage 1) but allow more variation.
+        Stage 2: medium runs - larger area, medium goals, MORE VARIATION in direction.
+        This is distinct from Stage 1: goals can be in any direction relative to start.
         """
+        # Start anywhere in Stage 2 area
         sx = random.uniform(STAGE2_SX_MIN, STAGE2_SX_MAX)
         sy = random.uniform(STAGE2_SY_MIN, STAGE2_SY_MAX)
-        yaw = random.uniform(-0.3, 0.3)  # Small orientation (not full 360)
+        yaw = random.uniform(-math.pi, math.pi)  # Any orientation (full 360)
 
-        # Goal at medium distance - but mostly forward (like Stage 1)
+        # Goal at medium distance - ANY direction (not just forward)
         goal_dist = random.uniform(STAGE2_GOAL_MIN, STAGE2_GOAL_MAX)
-        goal_angle = random.uniform(-0.4, 0.4)  # Mostly forward, not random direction
+        goal_angle = random.uniform(0, 2 * math.pi)  # Random direction (full 360)
         
-        gx = sx + goal_dist * math.cos(yaw + goal_angle)
-        gy = sy + goal_dist * math.sin(yaw + goal_angle)
+        # Goal relative to start position (not relative to yaw)
+        gx = sx + goal_dist * math.cos(goal_angle)
+        gy = sy + goal_dist * math.sin(goal_angle)
         
         # Keep goal within Stage 2 bounds
         gx = max(STAGE2_SX_MIN, min(STAGE2_SX_MAX, gx))
@@ -375,16 +377,19 @@ class Tb3Env(Node):
 
     def _sample_stage3(self):
         """
-        Stage 3: longer runs in full warehouse area.
+        Stage 3: longer runs in full warehouse area with obstacles.
+        Goals can be anywhere, requiring navigation around shelves.
         """
+        # Start anywhere in Stage 3 area (full warehouse)
         sx = random.uniform(STAGE3_SX_MIN, STAGE3_SX_MAX)
         sy = random.uniform(STAGE3_SY_MIN, STAGE3_SY_MAX)
-        yaw = random.uniform(0, 2 * math.pi)
+        yaw = random.uniform(0, 2 * math.pi)  # Any orientation
 
-        # Goal at longer distance
+        # Goal at longer distance - any direction
         goal_dist = random.uniform(STAGE3_GOAL_MIN, STAGE3_GOAL_MAX)
-        goal_angle = random.uniform(0, 2 * math.pi)
+        goal_angle = random.uniform(0, 2 * math.pi)  # Random direction
         
+        # Goal relative to start position
         gx = sx + goal_dist * math.cos(goal_angle)
         gy = sy + goal_dist * math.sin(goal_angle)
         
@@ -395,12 +400,19 @@ class Tb3Env(Node):
         return (sx, sy, yaw), (gx, gy)
 
     def _choose_start_goal(self):
+        """Choose start/goal based on current curriculum stage"""
         if self.stage == 1:
-            return self._sample_stage1()
+            start_pose, goal_pose = self._sample_stage1()
+            self.get_logger().debug(f"Stage 1: start=({start_pose[0]:.2f}, {start_pose[1]:.2f}), goal=({goal_pose[0]:.2f}, {goal_pose[1]:.2f})")
+            return start_pose, goal_pose
         elif self.stage == 2:
-            return self._sample_stage2()
-        else:
-            return self._sample_stage3()
+            start_pose, goal_pose = self._sample_stage2()
+            self.get_logger().debug(f"Stage 2: start=({start_pose[0]:.2f}, {start_pose[1]:.2f}), goal=({goal_pose[0]:.2f}, {goal_pose[1]:.2f})")
+            return start_pose, goal_pose
+        else:  # Stage 3
+            start_pose, goal_pose = self._sample_stage3()
+            self.get_logger().debug(f"Stage 3: start=({start_pose[0]:.2f}, {start_pose[1]:.2f}), goal=({goal_pose[0]:.2f}, {goal_pose[1]:.2f})")
+            return start_pose, goal_pose
 
     # ---------------------------------------------------------
     # Observation
@@ -459,7 +471,11 @@ class Tb3Env(Node):
                 self.stage = 2
                 self.get_logger().info(
                     f"[Curriculum] Advanced to STAGE 2 "
-                    f"(success_rate={sr:.2f}, streak={self.success_streak})"
+                    f"(success_rate={sr:.2f}, streak={self.success_streak}, episodes={len(self.recent_successes)})"
+                )
+                self.get_logger().info(
+                    f"[Curriculum] Stage 2: Goals {STAGE2_GOAL_MIN}-{STAGE2_GOAL_MAX}m, "
+                    f"Area ({STAGE2_SX_MIN:.1f} to {STAGE2_SX_MAX:.1f}, {STAGE2_SY_MIN:.1f} to {STAGE2_SY_MAX:.1f})"
                 )
 
             # Stage 2 -> 3
@@ -472,7 +488,11 @@ class Tb3Env(Node):
                 self.stage = 3
                 self.get_logger().info(
                     f"[Curriculum] Advanced to STAGE 3 "
-                    f"(success_rate={sr:.2f}, streak={self.success_streak})"
+                    f"(success_rate={sr:.2f}, streak={self.success_streak}, episodes={len(self.recent_successes)})"
+                )
+                self.get_logger().info(
+                    f"[Curriculum] Stage 3: Goals {STAGE3_GOAL_MIN}-{STAGE3_GOAL_MAX}m, "
+                    f"Area ({STAGE3_SX_MIN:.1f} to {STAGE3_SX_MAX:.1f}, {STAGE3_SY_MIN:.1f} to {STAGE3_SY_MAX:.1f})"
                 )
 
             # Append metrics (use previous stage for logging)
@@ -490,10 +510,15 @@ class Tb3Env(Node):
                     f"{self.cumulative_reward:.3f}\n"
                 )
 
+            # Log episode with stage info
+            stage_str = f"stage={prev_stage}"
+            if prev_stage != self.stage:
+                stage_str += f"→{self.stage}"  # Show stage transition
+            
             self.get_logger().info(
                 f"[EP {self.episode_idx}] "
-                f"stage={prev_stage} steps={self.episode_steps} "
-                f"final_dist={final_dist:.2f} success={success} "
+                f"{stage_str} steps={self.episode_steps} "
+                f"final_dist={final_dist:.2f}m success={success} "
                 f"return={self.cumulative_reward:.2f} "
                 f"(sr={sr:.2f}, streak={self.success_streak})"
             )

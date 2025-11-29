@@ -22,8 +22,10 @@ setup(
     license='MIT',
     entry_points={
         'console_scripts': [
-            'train_ppo = rl_nav.train_ppo:main',  # <-- what ros2 run will call
+            'train_ppo = rl_nav.train_ppo:main',
             'ppo_controller_node = rl_nav.ppo_controller_node:main',
+            'sorting_node = rl_nav.sorting_node:main',
+            'evaluate_ppo = rl_nav.evaluate_ppo:main',
         ],
     },
 )
