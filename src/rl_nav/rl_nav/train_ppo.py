@@ -461,6 +461,14 @@ class Tb3Env(Node):
 
             prev_stage = self.stage
 
+            # Debug logging for curriculum progression (only log when close to advancing)
+            if self.stage == 1 and self.success_streak >= 3:
+                self.get_logger().info(
+                    f"[Curriculum Check] stage=1, len={len(self.recent_successes)}, "
+                    f"sr={sr:.2f}, streak={self.success_streak}, "
+                    f"needs: len>={MIN_EPISODES_STAGE1}, sr>={STAGE1_SUCCESS_THRESHOLD}, streak>=3"
+                )
+
             # Stage 1 -> 2
             if (
                 self.stage == 1
