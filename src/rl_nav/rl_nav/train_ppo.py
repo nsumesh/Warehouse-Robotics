@@ -268,7 +268,7 @@ class Tb3Env(Node):
 
         # --- Curriculum state ---
         self.stage = 1  # Can be overridden by main() when resuming
-        self.recent_successes = deque(maxlen=20)
+        self.recent_successes = deque(maxlen=max(MIN_EPISODES_STAGE1, MIN_EPISODES_STAGE2) + 5)
         self.success_streak = 0
 
         # --- Metrics logging ---
