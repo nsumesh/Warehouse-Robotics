@@ -107,8 +107,8 @@ STAGE2_SX_MIN = -2.5  # clear aisle area
 STAGE2_SX_MAX = 2.5   # can use both aisles
 STAGE2_SY_MIN = -3.0  # avoid shelf rows (shelves at y=-6, -3.6, -1.2, 1.2, 3.6, 6.0)
 STAGE2_SY_MAX = 3.0
-STAGE2_GOAL_MIN = 0.8   # Start closer to Stage 1 (was 1.5)
-STAGE2_GOAL_MAX = 1.5   # Gradual increase (was 2.5)
+STAGE2_GOAL_MIN = 0.5   # Even closer to Stage 1 (only 0.1m more than Stage 1 max)
+STAGE2_GOAL_MAX = 0.9   # Very gradual increase (only 0.1m more than Stage 1 max)
 
 # Stage 3: Full warehouse - use all clear areas and navigate around shelves
 # Shelves span from y=-6 to y=6, with spacing 2.4
