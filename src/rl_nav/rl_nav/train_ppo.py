@@ -766,6 +766,14 @@ def main():
         default=None,
         help="Curriculum stage to start at (1, 2, or 3). If not specified and resuming, will try to infer from checkpoint name or start at Stage 2"
     )
+    parser.add_argument(
+        "--level",
+        type=int,
+        default=None,
+        choices=[1, 2, 3],
+        help="Curriculum level/world to use (1=empty aisle, 2=moderate clutter, 3=full warehouse). "
+             "This should match the world launched via launch script. If not specified, uses automatic curriculum."
+    )
     args = parser.parse_args()
 
     rclpy.init()
@@ -785,6 +793,15 @@ def main():
         with open(node.metrics_path, "w") as f:
             f.write("episode,stage,steps,final_dist,success,return\n")
     
+    # Handle --level argument (curriculum level/world selection)
+    if args.level is not None:
+        node.stage = args.level
+        node.get_logger().info(
+            f"Using curriculum Level {args.level} "
+            f"({'empty aisle' if args.level == 1 else 'moderate clutter' if args.level == 2 else 'full warehouse'}). "
+            f"Make sure the corresponding world is launched!"
+        )
+    
     # Set starting stage if specified or if resuming
     if args.start_stage is not None:
         if args.start_stage < 1 or args.start_stage > 3:
@@ -793,13 +810,13 @@ def main():
             return
         node.stage = args.start_stage
         node.get_logger().info(f"Starting at curriculum Stage {args.start_stage}")
-    elif args.resume:
-        # If resuming but no stage specified, default to Stage 2
+    elif args.resume and args.level is None:
+        # If resuming but no stage/level specified, default to Stage 2
         # (assuming Stage 1 was completed in previous training)
         node.stage = 2
         node.get_logger().info(
             "Resuming training: Starting at Stage 2 (assuming Stage 1 was completed). "
-            "Use --start-stage to override."
+            "Use --start-stage or --level to override."
         )
 
     # Spawn TB3 once (world must already be running)
