@@ -26,6 +26,7 @@ setup(
             'ppo_controller_node = rl_nav.ppo_controller_node:main',
             'sorting_node = rl_nav.sorting_node:main',
             'evaluate_ppo = rl_nav.evaluate_ppo:main',
+            'eval_policy = rl_nav.eval_policy:main',
             'virtual_pickup_node = rl_nav.virtual_pickup_node:main',
         ],
     },

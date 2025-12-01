@@ -1,83 +1,65 @@
-# evaluate_ppo.py
+#!/usr/bin/env python3
+"""
+Evaluate trained PPO model on navigation tasks.
+"""
 import os
-import numpy as np
 import rclpy
-
-from rl_nav.train_ppo import Tb3Env, GymTb3   # adjust if package name differs
+from rl_nav.train_ppo import Tb3Env, GymTb3
 from stable_baselines3 import PPO
 
 
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser()
-    # Try to find model in repo ppo_runs directory (relative to current working dir)
+    parser = argparse.ArgumentParser(description="Evaluate trained PPO model")
     default_model = os.path.abspath("ppo_runs/tb3_ppo.zip")
-    
-    parser.add_argument(
-        "--model",
-        type=str,
-        default=default_model,
-        help="Path to trained PPO model .zip file (default: ppo_runs/tb3_ppo.zip in repo)",
-    )
-    parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument("--model", type=str, default=default_model,
+                        help="Path to trained PPO model (default: ppo_runs/tb3_ppo.zip)")
+    parser.add_argument("--episodes", type=int, default=10, help="Number of episodes to evaluate")
     args = parser.parse_args()
+
+    if not os.path.exists(args.model):
+        print(f"Error: Model not found at {args.model}")
+        return
 
     rclpy.init()
     node = Tb3Env()
     env = GymTb3(node)
-
     model = PPO.load(args.model)
-    print(f"Loaded model from {args.model}")
+    print(f"Loaded model from {args.model}\n")
 
     success_count = 0
-    total_collisions = 0
-    total_distance = 0.0
     total_steps = 0
-    min_obstacle_dists = []
+    total_distance = 0.0
 
     for ep in range(args.episodes):
         obs, _ = env.reset()
         done = False
+        final_info = None
 
-        while True:
+        while not done:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
-            if done:
-                break
+            final_info = info
 
-        # Read metrics from node
-        success = node.success
-        ep_collisions = node.episode_collisions
-        ep_dist = node.episode_distance
-        ep_steps = node.episode_steps
-        ep_min_obs = node.min_obstacle_dist
+        if final_info:
+            success = final_info.get("success", False)
+            dist = final_info.get("distance_to_goal", 0.0)
+            steps = final_info.get("episode_steps", 0)
 
-        if success:
-            success_count += 1
-        total_collisions += ep_collisions
-        total_distance += ep_dist
-        total_steps += ep_steps
-        min_obstacle_dists.append(ep_min_obs)
+            if success:
+                success_count += 1
+            total_steps += steps
+            total_distance += dist
 
-        print(
-            f"[Episode {ep+1}] "
-            f"success={success}  steps={ep_steps}  "
-            f"distance={ep_dist:.2f} m  collisions={ep_collisions}  "
-            f"min_obstacle_dist={ep_min_obs:.2f} m"
-        )
+            print(f"[Episode {ep+1}] success={success}  steps={steps}  distance={dist:.2f}m")
 
-    print("\n=== Aggregate metrics ===")
+    print("\n=== Results ===")
     print(f"Episodes: {args.episodes}")
-    print(f"Success rate: {success_count / args.episodes:.2f}")
+    print(f"Success rate: {success_count / args.episodes:.2%}")
     print(f"Avg steps: {total_steps / args.episodes:.1f}")
-    print(f"Avg distance: {total_distance / args.episodes:.2f} m")
-    print(f"Total collisions: {total_collisions}")
-    if min_obstacle_dists:
-        print(
-            f"Avg closest obstacle: {np.mean(min_obstacle_dists):.2f} m"
-        )
+    print(f"Avg final distance: {total_distance / args.episodes:.2f}m")
 
     rclpy.shutdown()
 
