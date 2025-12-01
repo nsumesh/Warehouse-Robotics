@@ -173,3 +173,29 @@ colcon build --packages-select warehouse_sim
 ```bash
 ~/MSML642FinalProject/launch_warehouse.sh
 ```
+
+# Docking System
+```bash
+# Build + Source the workspace
+cd ~/MSML642FinalProject
+colcon build
+source install/setup.bash
+
+# Launch the warehouse with TB3
+./launch_warehouse.sh
+
+# Spawn the blue box model
+# It lives in gazebo_models/blue_box/model.sdf | gazebo_models/blue_box/model.config
+ros2 run gazebo_ros spawn_entity.py -entity blue_box \
+     -file $HOME/MSML642FinalProject/gazebo_models/blue_box/model.sdf \
+     -x 0.0 -y 1.0 -z 0.05
+
+# Run the docking node
+ros2 run color_docking color_docking_node
+# Output should read 'Blue marker detected'
+
+```
+
+
+
+
