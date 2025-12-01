@@ -607,13 +607,14 @@ class WarehouseObjectSpawner(Node):
 
     #   self.get_logger().info("Clustered warehouse created successfully!")
     def spawn_warehouse_lanes(self):
-        self.get_logger().info("Spawning lane-based warehouse layout...")
+        """Spawn simplified warehouse layout: single aisle with 3 shelves, minimal obstacles."""
+        self.get_logger().info("Spawning simplified warehouse layout...")
 
-        # Lane configuration
-        lane_x_positions = [-4.0, 0.0, 4.0]   # three aisles
-        num_shelves_per_lane = 6
-        start_y = -6.0
-        spacing_y = 2.4
+        # SIMPLIFIED: Single aisle, fewer shelves for limited workspace
+        lane_x_positions = [-2.0]   # ONE aisle (aligned with workspace)
+        num_shelves_per_lane = 3    # 3 shelves (was 6)
+        start_y = -2.0              # Start within workspace bounds
+        spacing_y = 2.0              # 2.0m spacing between shelves
 
         shelf_width = 1.4
         shelf_depth = 0.45
@@ -625,10 +626,10 @@ class WarehouseObjectSpawner(Node):
         box_mass = 0.6
         box_color = [0.9, 0.6, 0.2, 1.0]
 
-        # ----- Shelves forming lanes -----
+        # ----- Single aisle with 3 shelves -----
         for lane_idx, x in enumerate(lane_x_positions):
             for i in range(num_shelves_per_lane):
-                y = start_y + i * spacing_y
+                y = start_y + i * spacing_y  # y = -2.0, 0.0, 2.0
 
                 shelf_sdf = self.generate_shelf_sdf(
                     width=shelf_width,
@@ -638,11 +639,11 @@ class WarehouseObjectSpawner(Node):
                 )
 
                 shelf_name = f"lane{lane_idx}_shelf_{i}"
-                # yaw = 0 → shelves extend along +x (like what you already have)
                 self.spawn_object(shelf_name, shelf_sdf, x, y, 0.0, yaw=0.0)
+                time.sleep(0.1)
 
-                # place 2–3 boxes on each shelf
-                num_boxes = 3
+                # 2 boxes per shelf (was 3) for simpler layout
+                num_boxes = 2
                 for b in range(num_boxes):
                     bx = x - shelf_width / 2 + 0.3 + b * 0.35
                     by = y
@@ -651,46 +652,49 @@ class WarehouseObjectSpawner(Node):
                     sdf = self.generate_box_sdf(box_size, box_mass, box_color)
                     box_name = f"lane{lane_idx}_shelfbox_{i}_{b}"
                     self.spawn_object(box_name, sdf, bx, by, bz)
+                    time.sleep(0.1)
 
-        # ----- Pallet zone at one end of the lanes -----
-        pallet_y = -9.0
-        pallet_x_positions = [-4.0, 0.0, 4.0]
+        # ----- Single pallet at one end -----
+        pallet_y = -4.0  # Closer to workspace (was -9.0)
+        pallet_x_positions = [-2.0]  # One pallet (was 3)
 
         for idx, x in enumerate(pallet_x_positions):
             pallet_sdf = """<?xml version='1.0'?>
-        <sdf version='1.6'>
-        <model name='pallet'>
-        <static>true</static>
-        <link name='link'>
-        <collision name='collision'>
-        <geometry><box><size>1.0 1.0 0.15</size></box></geometry>
-        </collision>
-        <visual name='visual'>
-        <geometry><box><size>1.0 1.0 0.15</size></box></geometry>
-        <material>
-          <ambient>0.7 0.7 0.7 1</ambient>
-          <diffuse>0.7 0.7 0.7 1</diffuse>
-        </material>
-        </visual>
-        </link>
-        </model>
-        </sdf>
-        """
+<sdf version='1.6'>
+<model name='pallet'>
+<static>true</static>
+<link name='link'>
+<collision name='collision'>
+<geometry><box><size>1.0 1.0 0.15</size></box></geometry>
+</collision>
+<visual name='visual'>
+<geometry><box><size>1.0 1.0 0.15</size></box></geometry>
+<material>
+  <ambient>0.7 0.7 0.7 1</ambient>
+  <diffuse>0.7 0.7 0.7 1</diffuse>
+</material>
+</visual>
+</link>
+</model>
+</sdf>
+"""
             self.spawn_object(f"lane_pallet_{idx}", pallet_sdf, x, pallet_y, 0.075)
+            time.sleep(0.1)
 
-            # Boxes on pallet
-            for b in range(2):
-                size = [0.25, 0.20, 0.18]
-                mass = 0.8
-                color = [0.8, 0.5, 0.2, 1]
-                bx = x - 0.20 + b * 0.4
-                by = pallet_y
-                bz = 0.15 + size[2] / 2 + 0.01
+            # 1 box on pallet (was 2) for minimal clutter
+            size = [0.25, 0.20, 0.18]
+            mass = 0.8
+            color = [0.8, 0.5, 0.2, 1]
+            bx = x
+            by = pallet_y
+            bz = 0.15 + size[2] / 2 + 0.01
 
-                sdf = self.generate_box_sdf(size, mass, color)
-                self.spawn_object(f"lane_pallet_box_{idx}_{b}", sdf, bx, by, bz)
+            sdf = self.generate_box_sdf(size, mass, color)
+            self.spawn_object(f"lane_pallet_box_{idx}_0", sdf, bx, by, bz)
+            time.sleep(0.1)
 
-        self.get_logger().info("Lane-based warehouse created successfully!")
+        self.get_logger().info("Simplified warehouse created successfully!")
+        self.get_logger().info("Layout: 1 aisle, 3 shelves, 6 boxes, 1 pallet (11 objects total)")
 
 
 
