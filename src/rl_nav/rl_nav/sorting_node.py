@@ -28,11 +28,11 @@ class SortingNode(Node):
         model_relative = os.path.abspath("ppo_runs/tb3_ppo.zip")
         model_home = os.path.expanduser("~/MSML_642_FinalProject/ppo_runs/tb3_ppo.zip")
         model_path = model_relative if os.path.exists(model_relative) else model_home
-
+        
         if not os.path.exists(model_path):
             self.get_logger().error(f"PPO model not found: {model_path}\nTrain first: ros2 run rl_nav train_ppo")
             raise RuntimeError("PPO model missing")
-
+        
         self.model = PPO.load(model_path)
         self.get_logger().info(f"Loaded PPO model: {model_path}")
 
@@ -119,31 +119,31 @@ class SortingNode(Node):
         # Timeout check
         if self.task_start_time and (now - self.task_start_time) > self.max_task_time:
             self.get_logger().warn("Task timeout, advancing phase")
-            self._advance_phase()
+                self._advance_phase()
 
         # FSM
         if self.phase == "IDLE" and self.task_queue:
-            self.current_task = self.task_queue.pop(0)
-            self.phase = "GO_PICKUP"
-            self.task_start_time = now
-            px, py = self.pickup_locations[self.current_task]
-            self.current_goal = (px, py)
+                self.current_task = self.task_queue.pop(0)
+                self.phase = "GO_PICKUP"
+                self.task_start_time = now
+                px, py = self.pickup_locations[self.current_task]
+                self.current_goal = (px, py)
             self.get_logger().info(f"[Task] {self.current_task.upper()}: Going to pickup @ ({px:.1f}, {py:.1f})")
 
         elif self.phase == "GO_PICKUP" and self._goal_reached():
-            self.phase = "GO_DROPOFF"
-            self.task_start_time = now
-            dx, dy = self.drop_bins[self.current_task]
-            self.current_goal = (dx, dy)
+                self.phase = "GO_DROPOFF"
+                self.task_start_time = now
+                dx, dy = self.drop_bins[self.current_task]
+                self.current_goal = (dx, dy)
             self.get_logger().info(f"[Task] {self.current_task.upper()}: Reached pickup. Going to bin @ ({dx:.1f}, {dy:.1f})")
 
         elif self.phase == "GO_DROPOFF" and self._goal_reached():
             self.get_logger().info(f"[Task] Completed sorting {self.current_task.upper()} item")
-            self.current_task = None
-            self.phase = "IDLE"
-            self.current_goal = None
-            self.task_start_time = None
-            if not self.task_queue:
+                self.current_task = None
+                self.phase = "IDLE"
+                self.current_goal = None
+                self.task_start_time = None
+                if not self.task_queue:
                 self.get_logger().info("All tasks completed!")
 
     def _advance_phase(self):

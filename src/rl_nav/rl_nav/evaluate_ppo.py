@@ -48,8 +48,8 @@ def main():
             dist = final_info.get("distance_to_goal", 0.0)
             steps = final_info.get("episode_steps", 0)
 
-            if success:
-                success_count += 1
+        if success:
+            success_count += 1
             total_steps += steps
             total_distance += dist
 

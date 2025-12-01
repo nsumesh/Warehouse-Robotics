@@ -23,15 +23,15 @@ except ImportError:
 
 class VirtualPickupNode(Node):
     """Virtual pickup: detect items, pick up when close, drop at bins."""
-
+    
     def __init__(self):
         super().__init__("virtual_pickup_node")
         self.odom_sub = self.create_subscription(Odometry, "/odom", self._odom_cb, 10)
         self.camera_sub = self.create_subscription(Image, "/camera/image_raw", self._camera_cb, 10)
-
+        
         self.delete_client = self.create_client(DeleteEntity, "/delete_entity")
         self.spawn_client = self.create_client(SpawnEntity, "/spawn_entity")
-
+        
         self.get_logger().info("Waiting for Gazebo services...")
         self.delete_client.wait_for_service(timeout_sec=5.0)
         self.spawn_client.wait_for_service(timeout_sec=5.0)
@@ -41,7 +41,7 @@ class VirtualPickupNode(Node):
         self.bridge = CvBridge() if CV_AVAILABLE else None
         if not CV_AVAILABLE:
             self.get_logger().warn("OpenCV not available, using distance-based detection")
-
+        
         self.picked_item = None
         self.picked_item_type = None
         self.items_in_world = {
@@ -61,7 +61,7 @@ class VirtualPickupNode(Node):
 
         self.timer = self.create_timer(0.1, self.update_loop)
         self.get_logger().info("VirtualPickupNode initialized")
-
+    
     def _odom_cb(self, msg):
         """Update robot pose."""
         x = msg.pose.pose.position.x
@@ -69,22 +69,22 @@ class VirtualPickupNode(Node):
         q = msg.pose.pose.orientation
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         self.pose[:] = (x, y, yaw)
-
+    
     def _camera_cb(self, msg):
         """Process camera image."""
         if self.bridge:
-            try:
+        try:
                 self.camera_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
             except Exception:
                 pass
-
+    
     def _detect_items_camera(self):
         """Detect items using ArUco markers or color blobs."""
         if not self.camera_image or not CV_AVAILABLE or not self.bridge:
             return []
-
+        
         detected_items = []
-
+        
         # ArUco marker detection
         try:
             aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
@@ -98,7 +98,7 @@ class VirtualPickupNode(Node):
                                           "distance": marker_size})
         except Exception:
             pass
-
+        
         # Color blob detection (fallback)
         if not detected_items:
             try:
@@ -117,25 +117,25 @@ class VirtualPickupNode(Node):
                                                    "type": item_type, "distance": 1000.0 / cv2.contourArea(contour)})
             except Exception:
                 pass
-
+        
         return detected_items
-
+    
     def _distance_to_item(self, item_pose):
         """Calculate distance to item."""
         dx = item_pose[0] - self.pose[0]
         dy = item_pose[1] - self.pose[1]
         return math.hypot(dx, dy)
-
+    
     def _pickup_item(self, item_id, item_type):
         """Delete item from world (virtual pickup)."""
         if self.picked_item is not None:
             return False
-
+        
         req = DeleteEntity.Request()
         req.name = item_id
         future = self.delete_client.call_async(req)
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-
+        
         if future.result() and future.result().success:
             self.picked_item = item_id
             self.picked_item_type = item_type
@@ -143,17 +143,17 @@ class VirtualPickupNode(Node):
                 del self.items_in_world[item_id]
             self.get_logger().info(f"Picked up {item_type} item: {item_id}")
             return True
-        return False
-
+            return False
+    
     def _drop_item(self):
         """Spawn item at sorting bin."""
         if self.picked_item is None:
             return False
-
+        
         item_type = self.picked_item_type
         if item_type not in self.sorting_bins:
             return False
-
+        
         bin_x, bin_y, bin_z = self.sorting_bins[item_type]
         item_sdf = f"""<?xml version="1.0"?>
 <sdf version="1.6">
@@ -170,7 +170,7 @@ class VirtualPickupNode(Node):
     </link>
   </model>
 </sdf>"""
-
+        
         req = SpawnEntity.Request()
         req.name = f"{self.picked_item}_sorted"
         req.xml = item_sdf
@@ -179,17 +179,17 @@ class VirtualPickupNode(Node):
         req.initial_pose = Pose()
         req.initial_pose.position = Point(x=float(bin_x), y=float(bin_y), z=float(bin_z))
         req.initial_pose.orientation = Quaternion(w=1.0)
-
+        
         future = self.spawn_client.call_async(req)
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-
+        
         if future.result():
             self.get_logger().info(f"Dropped {item_type} item at bin ({bin_x:.1f}, {bin_y:.1f})")
             self.picked_item = None
             self.picked_item_type = None
             return True
-        return False
-
+            return False
+    
     def _goal_reached(self):
         """Check if goal reached."""
         if self.current_goal is None:
@@ -197,7 +197,7 @@ class VirtualPickupNode(Node):
         dx = self.current_goal[0] - self.pose[0]
         dy = self.current_goal[1] - self.pose[1]
         return math.hypot(dx, dy) < self.goal_reached_threshold
-
+    
     def update_loop(self):
         """Main loop: check pickup and drop-off."""
         if self.picked_item is None:
@@ -215,14 +215,14 @@ class VirtualPickupNode(Node):
                                 if self._distance_to_item(item_data["pose"]) < self.pickup_distance_threshold:
                                     self._pickup_item(item_id, item_data["type"])
                                     break
-
+        
         if self.picked_item is not None and self._goal_reached():
             self._drop_item()
-
+    
     def set_goal(self, x, y):
         """Set navigation goal."""
         self.current_goal = (x, y)
-
+    
     def get_picked_item(self):
         """Get currently picked item."""
         return self.picked_item, self.picked_item_type

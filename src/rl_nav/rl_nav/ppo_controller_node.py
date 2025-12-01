@@ -44,7 +44,7 @@ def spawn_tb3(node):
     if future.result():
         node.get_logger().info("TB3 spawned successfully")
         return True
-    return False
+        return False
 
 
 class PPOController(Node):
