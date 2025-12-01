@@ -611,10 +611,10 @@ class WarehouseObjectSpawner(Node):
         self.get_logger().info("Spawning simplified warehouse layout...")
 
         # SIMPLIFIED: Two aisles, fewer shelves for limited workspace
-        lane_x_positions = [-2.0, 0.0]   # TWO aisles (aligned with workspace)
+        lane_x_positions = [-3.0, 1.0]   # TWO aisles with more spacing (4.0m apart)
         num_shelves_per_lane = 3    # 3 shelves per aisle
         start_y = -2.0              # Start within workspace bounds
-        spacing_y = 2.0              # 2.0m spacing between shelves
+        spacing_y = 2.5              # 2.5m spacing between shelves (more room)
 
         shelf_width = 1.4
         shelf_depth = 0.45
@@ -656,7 +656,7 @@ class WarehouseObjectSpawner(Node):
 
         # ----- Two pallets at one end (one per aisle) -----
         pallet_y = -4.0  # Closer to workspace (was -9.0)
-        pallet_x_positions = [-2.0, 0.0]  # Two pallets (one per aisle)
+        pallet_x_positions = [-3.0, 1.0]  # Two pallets (one per aisle, matching aisle positions)
 
         for idx, x in enumerate(pallet_x_positions):
             pallet_sdf = """<?xml version='1.0'?>
