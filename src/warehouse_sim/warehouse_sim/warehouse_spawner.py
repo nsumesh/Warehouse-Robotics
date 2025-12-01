@@ -607,12 +607,12 @@ class WarehouseObjectSpawner(Node):
 
     #   self.get_logger().info("Clustered warehouse created successfully!")
     def spawn_warehouse_lanes(self):
-        """Spawn simplified warehouse layout: single aisle with 3 shelves, minimal obstacles."""
+        """Spawn simplified warehouse layout: two aisles with 3 shelves each, minimal obstacles."""
         self.get_logger().info("Spawning simplified warehouse layout...")
 
-        # SIMPLIFIED: Single aisle, fewer shelves for limited workspace
-        lane_x_positions = [-2.0]   # ONE aisle (aligned with workspace)
-        num_shelves_per_lane = 3    # 3 shelves (was 6)
+        # SIMPLIFIED: Two aisles, fewer shelves for limited workspace
+        lane_x_positions = [-2.0, 0.0]   # TWO aisles (aligned with workspace)
+        num_shelves_per_lane = 3    # 3 shelves per aisle
         start_y = -2.0              # Start within workspace bounds
         spacing_y = 2.0              # 2.0m spacing between shelves
 
@@ -626,7 +626,7 @@ class WarehouseObjectSpawner(Node):
         box_mass = 0.6
         box_color = [0.9, 0.6, 0.2, 1.0]
 
-        # ----- Single aisle with 3 shelves -----
+        # ----- Two aisles with 3 shelves each -----
         for lane_idx, x in enumerate(lane_x_positions):
             for i in range(num_shelves_per_lane):
                 y = start_y + i * spacing_y  # y = -2.0, 0.0, 2.0
@@ -654,9 +654,9 @@ class WarehouseObjectSpawner(Node):
                     self.spawn_object(box_name, sdf, bx, by, bz)
                     time.sleep(0.1)
 
-        # ----- Single pallet at one end -----
+        # ----- Two pallets at one end (one per aisle) -----
         pallet_y = -4.0  # Closer to workspace (was -9.0)
-        pallet_x_positions = [-2.0]  # One pallet (was 3)
+        pallet_x_positions = [-2.0, 0.0]  # Two pallets (one per aisle)
 
         for idx, x in enumerate(pallet_x_positions):
             pallet_sdf = """<?xml version='1.0'?>
@@ -694,7 +694,7 @@ class WarehouseObjectSpawner(Node):
             time.sleep(0.1)
 
         self.get_logger().info("Simplified warehouse created successfully!")
-        self.get_logger().info("Layout: 1 aisle, 3 shelves, 6 boxes, 1 pallet (11 objects total)")
+        self.get_logger().info("Layout: 2 aisles, 6 shelves, 12 boxes, 2 pallets (22 objects total)")
 
 
 
