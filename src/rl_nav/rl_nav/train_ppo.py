@@ -130,6 +130,8 @@ class Tb3Env(Node):
         else:  # Stage 3
             self.max_steps = 500  # Longest for sorting
 
+        self.in_close_zone = False  # Track if in close zone for one-time bonus
+
         self.actions = [
             (0.12, 0.6), (0.15, 0.0), (0.12, -0.6), (0.00, 0.6), (0.00, -0.6)
         ]
@@ -297,6 +299,7 @@ class Tb3Env(Node):
             rclpy.spin_once(self, timeout_sec=0.05)
 
         self.prev_dist = float(np.linalg.norm(self.goal - self.pose[:2]))
+        self.in_close_zone = False  # Reset close zone flag
         return self._obs()
 
     def step(self, a_idx: int):
@@ -335,9 +338,13 @@ class Tb3Env(Node):
         r = k_progress * delta
         r -= k_time  # Time penalty every step
 
-        # Intermediate bonus for getting close to goal
+        # Intermediate bonus for getting close to goal (one-time when entering)
         if dist < CLOSE_RADIUS and dist >= SUCCESS_RADIUS:
-            r += k_close * (1.0 - dist / CLOSE_RADIUS)  # Decreasing bonus as closer
+            if not self.in_close_zone:
+                r += 1.0  # One-time bonus for entering close zone
+                self.in_close_zone = True
+        elif dist >= CLOSE_RADIUS:
+            self.in_close_zone = False  # Reset when leaving close zone
 
         done = False
         success = False
