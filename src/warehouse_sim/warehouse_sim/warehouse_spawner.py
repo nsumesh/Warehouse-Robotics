@@ -682,14 +682,14 @@ class WarehouseObjectSpawner(Node):
             time.sleep(0.1)
 
             # 1 box on pallet (was 2) for minimal clutter
-                size = [0.25, 0.20, 0.18]
-                mass = 0.8
-                color = [0.8, 0.5, 0.2, 1]
+            size = [0.25, 0.20, 0.18]
+            mass = 0.8
+            color = [0.8, 0.5, 0.2, 1]
             bx = x
-                by = pallet_y
-                bz = 0.15 + size[2] / 2 + 0.01
+            by = pallet_y
+            bz = 0.15 + size[2] / 2 + 0.01
 
-                sdf = self.generate_box_sdf(size, mass, color)
+            sdf = self.generate_box_sdf(size, mass, color)
             self.spawn_object(f"lane_pallet_box_{idx}_0", sdf, bx, by, bz)
             time.sleep(0.1)
 
