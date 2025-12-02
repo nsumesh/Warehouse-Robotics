@@ -660,36 +660,36 @@ class WarehouseObjectSpawner(Node):
 
         for idx, x in enumerate(pallet_x_positions):
             pallet_sdf = """<?xml version='1.0'?>
-<sdf version='1.6'>
-<model name='pallet'>
-<static>true</static>
-<link name='link'>
-<collision name='collision'>
-<geometry><box><size>1.0 1.0 0.15</size></box></geometry>
-</collision>
-<visual name='visual'>
-<geometry><box><size>1.0 1.0 0.15</size></box></geometry>
-<material>
-  <ambient>0.7 0.7 0.7 1</ambient>
-  <diffuse>0.7 0.7 0.7 1</diffuse>
-</material>
-</visual>
-</link>
-</model>
-</sdf>
-"""
+        <sdf version='1.6'>
+        <model name='pallet'>
+        <static>true</static>
+        <link name='link'>
+        <collision name='collision'>
+        <geometry><box><size>1.0 1.0 0.15</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+        <geometry><box><size>1.0 1.0 0.15</size></box></geometry>
+        <material>
+          <ambient>0.7 0.7 0.7 1</ambient>
+          <diffuse>0.7 0.7 0.7 1</diffuse>
+        </material>
+        </visual>
+        </link>
+        </model>
+        </sdf>
+        """
             self.spawn_object(f"lane_pallet_{idx}", pallet_sdf, x, pallet_y, 0.075)
             time.sleep(0.1)
 
             # 1 box on pallet (was 2) for minimal clutter
-            size = [0.25, 0.20, 0.18]
-            mass = 0.8
-            color = [0.8, 0.5, 0.2, 1]
+                size = [0.25, 0.20, 0.18]
+                mass = 0.8
+                color = [0.8, 0.5, 0.2, 1]
             bx = x
-            by = pallet_y
-            bz = 0.15 + size[2] / 2 + 0.01
+                by = pallet_y
+                bz = 0.15 + size[2] / 2 + 0.01
 
-            sdf = self.generate_box_sdf(size, mass, color)
+                sdf = self.generate_box_sdf(size, mass, color)
             self.spawn_object(f"lane_pallet_box_{idx}_0", sdf, bx, by, bz)
             time.sleep(0.1)
 

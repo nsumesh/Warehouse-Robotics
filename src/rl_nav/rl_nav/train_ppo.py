@@ -48,6 +48,10 @@ DOCK_C = (-6.5, 2.0)   # Sorting category C
 # Optional pickup zone (for future use)
 PICKUP = (-4.0, 0.0)
 
+# Success and close zone radii (consistent across all methods)
+SUCCESS_RADIUS = 0.6  # Distance threshold for successful docking
+CLOSE_RADIUS = 1.5   # Distance threshold for intermediate close bonus
+
 
 def angle_diff(a: float, b: float) -> float:
     """Smallest signed difference between two angles in [-pi, pi]."""
@@ -196,7 +200,7 @@ class Tb3Env(Node):
             gx, gy = DOCK_A
             self.task_class = None
             return (sx, sy, yaw), (gx, gy)
-        
+
         elif self.curriculum_stage == 2:
             # Stage 2: Longer aisle navigation to DOCK_A
             # Start sampled in workspace, goal is DOCK_A
@@ -206,7 +210,7 @@ class Tb3Env(Node):
             gx, gy = DOCK_A
             self.task_class = None
             return (sx, sy, yaw), (gx, gy)
-        
+
         else:  # Stage 3
             # Stage 3: Virtual sorting between DOCK_A/DOCK_B/DOCK_C
             # Start sampled in workspace, randomly choose task class
@@ -252,7 +256,7 @@ class Tb3Env(Node):
         """Reset environment for new episode."""
         if self.episode_steps > 0 and self.prev_dist is not None:
             final_dist = float(np.linalg.norm(self.goal - self.pose[:2]))
-            success = int(final_dist < 0.4 and not self.collision)
+            success = int(final_dist < SUCCESS_RADIUS and not self.collision)
 
             # Log metrics
             if self.metrics_path is None:
@@ -324,9 +328,7 @@ class Tb3Env(Node):
         k_time = 0.005   # Reduced from 0.01 (less harsh)
         k_collision = 5.0
         k_success = 10.0
-        SUCCESS_RADIUS = 0.6  # Increased from 0.4 (more forgiving)
-        k_close = 2.0
-        CLOSE_RADIUS = 1.5  # Bonus when within 1.5m
+        # SUCCESS_RADIUS and CLOSE_RADIUS are module-level constants (defined at top)
 
         # Progress reward
         if self.prev_dist is None:
@@ -378,8 +380,8 @@ class Tb3Env(Node):
             else:
                 # Stage 1/2: any success is good
                 r += k_success
-                success = True
-                done = True
+            success = True
+            done = True
 
         # Timeout
         if self.episode_steps >= self.max_steps:
@@ -456,7 +458,7 @@ def main():
     if not os.path.isabs(args.logdir):
         args.logdir = os.path.abspath(args.logdir)
     os.makedirs(args.logdir, exist_ok=True)
-
+    
     # Set seed if provided
     if args.seed is not None:
         random.seed(args.seed)
@@ -469,7 +471,7 @@ def main():
     if not os.path.exists(node.metrics_path):
         with open(node.metrics_path, "w") as f:
             f.write("episode,stage,steps,final_dist,success,return\n")
-
+    
     node.get_logger().info(f"Training with curriculum stage {args.curriculum_stage}")
 
     if not spawn_tb3(node):
@@ -486,7 +488,7 @@ def main():
                 resume_path = os.path.abspath(args.resume)
         else:
             resume_path = os.path.expanduser(args.resume)
-
+        
         if os.path.exists(resume_path):
             node.get_logger().info(f"Loading checkpoint: {resume_path}")
             model = PPO.load(resume_path, env=env)
@@ -506,7 +508,7 @@ def main():
         node.get_logger().info("Starting fresh training")
 
     model.learn(total_timesteps=args.timesteps)
-    
+
     # Save model with stage-specific name
     if args.curriculum_stage == 1:
         model_name = "ppo_stage1.zip"
