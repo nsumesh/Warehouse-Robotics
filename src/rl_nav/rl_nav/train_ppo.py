@@ -122,7 +122,13 @@ class Tb3Env(Node):
         self.episode_steps = 0
         self.cumulative_reward = 0.0
         self.step_time = 0.15
-        self.max_steps = 300
+        # Stage-specific max steps
+        if curriculum_stage == 1:
+            self.max_steps = 200  # Short for local docking
+        elif curriculum_stage == 2:
+            self.max_steps = 400  # Longer for aisle navigation
+        else:  # Stage 3
+            self.max_steps = 500  # Longest for sorting
 
         self.actions = [
             (0.12, 0.6), (0.15, 0.0), (0.12, -0.6), (0.00, 0.6), (0.00, -0.6)
@@ -310,12 +316,14 @@ class Tb3Env(Node):
         dx, dy = (self.goal - self.pose[:2])
         dist = float(math.hypot(dx, dy))
 
-        # Reward constants
-        k_progress = 1.0
-        k_time = 0.01
+        # Reward constants - adjusted for better training
+        k_progress = 2.0  # Increased from 1.0
+        k_time = 0.005   # Reduced from 0.01 (less harsh)
         k_collision = 5.0
         k_success = 10.0
-        SUCCESS_RADIUS = 0.4
+        SUCCESS_RADIUS = 0.6  # Increased from 0.4 (more forgiving)
+        k_close = 2.0
+        CLOSE_RADIUS = 1.5  # Bonus when within 1.5m
 
         # Progress reward
         if self.prev_dist is None:
@@ -326,6 +334,10 @@ class Tb3Env(Node):
 
         r = k_progress * delta
         r -= k_time  # Time penalty every step
+
+        # Intermediate bonus for getting close to goal
+        if dist < CLOSE_RADIUS and dist >= SUCCESS_RADIUS:
+            r += k_close * (1.0 - dist / CLOSE_RADIUS)  # Decreasing bonus as closer
 
         done = False
         success = False
