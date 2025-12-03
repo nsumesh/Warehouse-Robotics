@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Sorting Node with PPO Navigation
+Sorting Node with Stage 3 PPO Navigation
 
-Manages sorting tasks (3 bins: light, heavy, fragile) using trained PPO policy.
+Manages virtual sorting tasks using trained Stage 3 PPO policy.
+Task classes: A, B, C (mapped to DOCK_A, DOCK_B, DOCK_C)
 FSM: IDLE → GO_PICKUP → GO_DROPOFF → IDLE
 """
 import os
@@ -15,47 +16,76 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
+from gazebo_msgs.srv import SpawnEntity, DeleteEntity
 from stable_baselines3 import PPO
+
+# Import constants from train_ppo.py
+from rl_nav.train_ppo import DOCK_A, DOCK_B, DOCK_C, PICKUP, SUCCESS_RADIUS
 
 
 class SortingNode(Node):
-    """Sorting node using trained PPO for navigation."""
+    """Sorting node using Stage 3 trained PPO for virtual sorting."""
 
     def __init__(self):
         super().__init__("sorting_node")
 
-        # Load PPO model
-        model_relative = os.path.abspath("ppo_runs/tb3_ppo.zip")
-        model_home = os.path.expanduser("~/MSML_642_FinalProject/ppo_runs/tb3_ppo.zip")
-        model_path = model_relative if os.path.exists(model_relative) else model_home
+        # Load Stage 3 PPO model
+        model_paths = [
+            os.path.abspath("ppo_runs/ppo_stage3_sorting.zip"),
+            os.path.expanduser("~/MSML_642_FinalProject/ppo_runs/ppo_stage3_sorting.zip"),
+            os.path.join(os.path.dirname(__file__), "../../../ppo_runs/ppo_stage3_sorting.zip"),
+        ]
+        model_path = None
+        for path in model_paths:
+            if os.path.exists(path):
+                model_path = path
+                break
         
-        if not os.path.exists(model_path):
-            self.get_logger().error(f"PPO model not found: {model_path}\nTrain first: ros2 run rl_nav train_ppo")
+        if not model_path:
+            self.get_logger().error("Stage 3 PPO model not found. Train first:")
+            self.get_logger().error("  ros2 run rl_nav train_ppo --curriculum-stage 3 --timesteps 100000")
             raise RuntimeError("PPO model missing")
         
         self.model = PPO.load(model_path)
-        self.get_logger().info(f"Loaded PPO model: {model_path}")
+        self.get_logger().info(f"Loaded Stage 3 PPO model: {model_path}")
 
         # ROS I/O
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
         self.scan_sub = self.create_subscription(LaserScan, "/scan", self._scan_cb, 10)
         self.odom_sub = self.create_subscription(Odometry, "/odom", self._odom_cb, 10)
+        
+        # Gazebo services for virtual pickup/dropoff
+        self.delete_client = self.create_client(DeleteEntity, "/delete_entity")
+        self.spawn_client = self.create_client(SpawnEntity, "/spawn_entity")
+        if self.delete_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().info("Gazebo services available for virtual sorting")
+        else:
+            self.get_logger().warn("Gazebo services not available - virtual sorting will be simulated")
 
-        # Configuration
-        self.pickup_locations = {"light": (-2.0, 0.0), "heavy": (0.0, 0.0), "fragile": (2.0, 0.0)}
-        self.drop_bins = {"light": (-4.0, -4.0), "heavy": (0.0, -4.0), "fragile": (4.0, -4.0)}
+        # Configuration - match Stage 3 training setup
+        self.pickup_location = PICKUP
+        self.drop_docks = {
+            'A': DOCK_A,
+            'B': DOCK_B,
+            'C': DOCK_C,
+        }
         self.actions = [(0.12, 0.6), (0.15, 0.0), (0.12, -0.6), (0.00, 0.6), (0.00, -0.6)]
 
         # State
         self.scan = None
         self.pose = np.zeros(3, dtype=np.float32)
         self.current_goal = None
-        self.goal_reached_threshold = 0.4
+        self.task_class = None  # 'A', 'B', or 'C'
+        self.goal_reached_threshold = SUCCESS_RADIUS
         self.task_queue = []
         self.current_task = None
-        self.phase = "IDLE"
+        self.phase = "IDLE"  # IDLE → GO_PICKUP → GO_DROPOFF → IDLE
         self.task_start_time = None
-        self.max_task_time = 60.0
+        self.max_task_time = 120.0
+
+        # Virtual items (for simulation)
+        self.items_at_pickup = []  # List of item names at pickup zone
+        self._initialize_items()
 
         # Initialize
         self._build_initial_tasks(5)
@@ -63,8 +93,13 @@ class SortingNode(Node):
         self.task_timer = self.create_timer(0.5, self.task_manager)
         self.get_logger().info(f"SortingNode initialized. Task queue: {self.task_queue}")
 
+    def _initialize_items(self):
+        """Initialize virtual items at pickup zone."""
+        # You can spawn items here or assume they exist in Gazebo
+        self.items_at_pickup = ["item_A_1", "item_B_1", "item_C_1", "item_A_2", "item_B_2"]
+
     def _scan_cb(self, msg):
-        """Process LiDAR scan into 24 bins."""
+        """Process LiDAR scan into 24 bins (match training)."""
         rng = np.array(msg.ranges, dtype=np.float32)
         n, bins = len(rng), 24
         step = max(1, n // bins)
@@ -89,17 +124,33 @@ class SortingNode(Node):
         self.pose[:] = (x, y, yaw)
 
     def _obs(self):
-        """Build observation for PPO."""
+        """Build 30-dim observation: 24 scan + [dx, dy, yaw] + task_class one-hot."""
         if self.scan is None or self.current_goal is None:
             return None
+        
+        # LiDAR bins (24 dims)
+        scan = self.scan
+        
+        # Goal relative pose (3 dims)
         dx, dy = (np.array(self.current_goal) - self.pose[:2])
         tail = np.array([dx, dy, self.pose[2]], dtype=np.float32)
-        return np.concatenate([self.scan, tail], axis=0)
+        
+        # Task class one-hot (3 dims) - CRITICAL for Stage 3
+        if self.task_class == 'A':
+            task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        elif self.task_class == 'B':
+            task_onehot = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+        elif self.task_class == 'C':
+            task_onehot = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        else:
+            # Default (shouldn't happen during GO_DROPOFF, but safe fallback)
+            task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        
+        return np.concatenate([scan, tail, task_onehot], axis=0)
 
     def _build_initial_tasks(self, num_tasks=5):
-        """Build initial task queue."""
-        item_types = list(self.pickup_locations.keys())
-        self.task_queue = [random.choice(item_types) for _ in range(num_tasks)]
+        """Build initial task queue with random categories."""
+        self.task_queue = [random.choice(['A', 'B', 'C']) for _ in range(num_tasks)]
 
     def _distance_to_goal(self):
         """Calculate distance to goal."""
@@ -112,6 +163,67 @@ class SortingNode(Node):
         """Check if goal reached."""
         return self._distance_to_goal() < self.goal_reached_threshold
 
+    def _virtual_pickup(self, item_name, task_class):
+        """Virtual pickup: delete item from pickup zone."""
+        if not self.delete_client.service_is_ready():
+            self.get_logger().warn("Gazebo service not ready - simulating pickup")
+            return True
+        
+        req = DeleteEntity.Request()
+        req.name = item_name
+        future = self.delete_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        
+        if future.result() and future.result().success:
+            self.get_logger().info(f"✓ Picked up {task_class} item: {item_name}")
+            return True
+        else:
+            self.get_logger().warn(f"Failed to delete {item_name} - simulating pickup")
+            return True  # Continue anyway
+
+    def _virtual_dropoff(self, task_class):
+        """Virtual dropoff: spawn item at dock."""
+        if not self.spawn_client.service_is_ready():
+            self.get_logger().warn("Gazebo service not ready - simulating dropoff")
+            return True
+        
+        dock_x, dock_y = self.drop_docks[task_class]
+        item_sdf = f"""<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="sorted_{task_class}_{int(time.time())}">
+    <static>false</static>
+    <pose>{dock_x} {dock_y} 0.1 0 0 0</pose>
+    <link name="link">
+      <collision name="collision">
+        <geometry><box><size>0.2 0.2 0.2</size></box></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><box><size>0.2 0.2 0.2</size></box></geometry>
+        <material>
+          <ambient>0.8 0.2 0.2 1</ambient>
+          <diffuse>0.8 0.2 0.2 1</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>"""
+        
+        req = SpawnEntity.Request()
+        req.name = f"sorted_{task_class}_{int(time.time())}"
+        req.xml = item_sdf
+        req.robot_namespace = ""
+        req.reference_frame = "world"
+        
+        future = self.spawn_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        
+        if future.result():
+            self.get_logger().info(f"✓ Dropped {task_class} item at DOCK_{task_class} ({dock_x:.1f}, {dock_y:.1f})")
+            return True
+        else:
+            self.get_logger().warn(f"Failed to spawn at dock - simulating dropoff")
+            return True  # Continue anyway
+
     def task_manager(self):
         """Manage task queue and FSM transitions."""
         now = time.time()
@@ -119,42 +231,58 @@ class SortingNode(Node):
         # Timeout check
         if self.task_start_time and (now - self.task_start_time) > self.max_task_time:
             self.get_logger().warn("Task timeout, advancing phase")
-                self._advance_phase()
+            self._advance_phase()
 
         # FSM
         if self.phase == "IDLE" and self.task_queue:
-                self.current_task = self.task_queue.pop(0)
-                self.phase = "GO_PICKUP"
-                self.task_start_time = now
-                px, py = self.pickup_locations[self.current_task]
-                self.current_goal = (px, py)
-            self.get_logger().info(f"[Task] {self.current_task.upper()}: Going to pickup @ ({px:.1f}, {py:.1f})")
+            # Start new task: go to pickup
+            self.current_task = self.task_queue.pop(0)
+            self.phase = "GO_PICKUP"
+            self.task_start_time = now
+            self.current_goal = self.pickup_location
+            self.task_class = None  # No task class yet (not picked up)
+            self.get_logger().info(f"[Task] {self.current_task}: Going to PICKUP @ ({self.pickup_location[0]:.1f}, {self.pickup_location[1]:.1f})")
 
         elif self.phase == "GO_PICKUP" and self._goal_reached():
-                self.phase = "GO_DROPOFF"
-                self.task_start_time = now
-                dx, dy = self.drop_bins[self.current_task]
-                self.current_goal = (dx, dy)
-            self.get_logger().info(f"[Task] {self.current_task.upper()}: Reached pickup. Going to bin @ ({dx:.1f}, {dy:.1f})")
+            # Reached pickup: assign task class and go to dock
+            self.phase = "GO_DROPOFF"
+            self.task_start_time = now
+            self.task_class = self.current_task  # Set task class for PPO observation
+            self.current_goal = self.drop_docks[self.task_class]
+            
+            # Virtual pickup
+            item_name = f"item_{self.task_class}_{random.randint(1, 10)}"
+            self._virtual_pickup(item_name, self.task_class)
+            
+            self.get_logger().info(f"[Task] {self.current_task}: Picked up. Going to DOCK_{self.current_task} @ ({self.current_goal[0]:.1f}, {self.current_goal[1]:.1f})")
 
         elif self.phase == "GO_DROPOFF" and self._goal_reached():
-            self.get_logger().info(f"[Task] Completed sorting {self.current_task.upper()} item")
-                self.current_task = None
-                self.phase = "IDLE"
-                self.current_goal = None
-                self.task_start_time = None
-                if not self.task_queue:
-                self.get_logger().info("All tasks completed!")
+            # Reached dock: drop off item
+            self._virtual_dropoff(self.task_class)
+            self.get_logger().info(f"[Task] ✓ Completed sorting {self.current_task} item")
+            
+            # Reset for next task
+            self.current_task = None
+            self.task_class = None
+            self.phase = "IDLE"
+            self.current_goal = None
+            self.task_start_time = None
+            
+            if not self.task_queue:
+                self.get_logger().info("🎉 All tasks completed!")
 
     def _advance_phase(self):
         """Advance to next phase on timeout."""
         if self.phase == "GO_PICKUP":
+            # Skip pickup, go straight to dropoff
             self.phase = "GO_DROPOFF"
-            dx, dy = self.drop_bins[self.current_task]
-            self.current_goal = (dx, dy)
+            self.task_class = self.current_task
+            self.current_goal = self.drop_docks[self.task_class]
             self.task_start_time = time.time()
         elif self.phase == "GO_DROPOFF":
+            # Skip dropoff, mark task as failed
             self.current_task = None
+            self.task_class = None
             self.phase = "IDLE"
             self.current_goal = None
             self.task_start_time = None
@@ -170,6 +298,7 @@ class SortingNode(Node):
         if obs is None:
             return
 
+        # Use Stage 3 model (expects 30-dim obs with task_class one-hot)
         action, _ = self.model.predict(obs, deterministic=True)
         v, w = self.actions[int(action)]
         msg = Twist()
