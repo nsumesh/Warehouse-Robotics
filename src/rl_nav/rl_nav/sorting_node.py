@@ -20,7 +20,7 @@ from gazebo_msgs.srv import SpawnEntity, DeleteEntity
 from stable_baselines3 import PPO
 
 # Import constants and spawn function from train_ppo.py
-from rl_nav.train_ppo import DOCK_A, DOCK_B, DOCK_C, PICKUP, SUCCESS_RADIUS, spawn_tb3
+from rl_nav.train_ppo import DOCK_A, DOCK_B, DOCK_C, PICKUP, SUCCESS_RADIUS, spawn_tb3, X_MIN, X_MAX, Y_MIN, Y_MAX
 
 
 class SortingNode(Node):
@@ -83,6 +83,8 @@ class SortingNode(Node):
         self.task_start_time = None
         self.max_task_time = 180.0  # Increased timeout for better navigation
         self._last_log_time = None  # For debug logging
+        self._last_stuck_check = None  # For stuck detection
+        self._last_stuck_dist = None  # For stuck detection
 
         # Virtual items (for simulation)
         self.items_at_pickup = []  # List of item names at pickup zone
@@ -169,6 +171,62 @@ class SortingNode(Node):
         """Check if goal reached."""
         return self._distance_to_goal() < self.goal_reached_threshold
 
+    def _check_collision(self):
+        """Check if robot is too close to obstacles."""
+        if self.scan is None:
+            return False
+        # Check if any LiDAR reading is very close (collision threshold)
+        min_dist = np.min(self.scan) * 3.5  # Convert normalized to meters
+        return min_dist < 0.2  # 20cm threshold
+
+    def _check_stuck(self):
+        """Check if robot is stuck (distance not improving)."""
+        if self._last_stuck_check is None:
+            self._last_stuck_check = time.time()
+            self._last_stuck_dist = self._distance_to_goal()
+            return False
+        
+        # Check every 10 seconds
+        if time.time() - self._last_stuck_check > 10.0:
+            current_dist = self._distance_to_goal()
+            # If distance hasn't improved by at least 0.1m in 10 seconds, consider stuck
+            if abs(current_dist - self._last_stuck_dist) < 0.1:
+                self.get_logger().warn(f"Robot appears stuck: dist={current_dist:.2f}m (no improvement)")
+                return True
+            self._last_stuck_check = time.time()
+            self._last_stuck_dist = current_dist
+        return False
+
+    def _reset_robot_position(self):
+        """Reset robot to a safe position when stuck."""
+        from gazebo_msgs.srv import SetEntityState
+        from gazebo_msgs.msg import EntityState
+        
+        reset_cli = self.create_client(SetEntityState, "/set_entity_state")
+        if not reset_cli.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warn("Cannot reset robot - service unavailable")
+            return False
+        
+        # Reset to workspace center
+        req = SetEntityState.Request()
+        req.state = EntityState()
+        req.state.name = "tb3"
+        req.state.pose.position.x = (X_MIN + X_MAX) / 2.0
+        req.state.pose.position.y = (Y_MIN + Y_MAX) / 2.0
+        req.state.pose.position.z = 0.1
+        req.state.pose.orientation.w = 1.0
+        
+        future = reset_cli.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        
+        if future.result():
+            self.get_logger().info("Robot position reset to workspace center")
+            # Reset stuck detection after successful reset
+            self._last_stuck_check = None
+            self._last_stuck_dist = None
+            return True
+        return False
+
     def _virtual_pickup(self, item_name, task_class):
         """Virtual pickup: delete item from pickup zone."""
         if not self.delete_client.service_is_ready():
@@ -233,6 +291,30 @@ class SortingNode(Node):
     def task_manager(self):
         """Manage task queue and FSM transitions."""
         now = time.time()
+
+        # Check for collision or stuck (only during active navigation)
+        if self.phase in ["GO_PICKUP", "GO_DROPOFF"]:
+            if self._check_collision():
+                self.get_logger().warn("Collision detected! Resetting robot position...")
+                if self._reset_robot_position():
+                    # Reset task start time to give it another chance
+                    self.task_start_time = time.time()
+                    return
+                else:
+                    # If reset fails, skip to next phase
+                    self.get_logger().warn("Reset failed, advancing phase")
+                    self._advance_phase()
+                    return
+            
+            if self._check_stuck():
+                self.get_logger().warn("Robot stuck! Resetting position...")
+                if self._reset_robot_position():
+                    self.task_start_time = time.time()
+                    return
+                else:
+                    self.get_logger().warn("Reset failed, skipping task")
+                    self._advance_phase()
+                    return
 
         # Timeout check
         if self.task_start_time and (now - self.task_start_time) > self.max_task_time:
