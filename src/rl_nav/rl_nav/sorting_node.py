@@ -7,6 +7,8 @@ Task classes: A, B, C (mapped to DOCK_A, DOCK_B, DOCK_C)
 FSM: IDLE → GO_PICKUP → GO_DROPOFF → IDLE
 """
 import os
+import sys
+import signal
 import time
 import math
 import random
@@ -176,7 +178,7 @@ class SortingNode(Node):
             now = time.time()
             if self._goal_reached_time is None:
                 self._goal_reached_time = now
-            elif now - self._goal_reached_time >= 2.0:  # Stable for 2 seconds
+            elif now - self._goal_reached_time >= 3.0:  # Stable for 3 seconds
                 return True
         else:
             # Reset timer if we're not close anymore
@@ -193,16 +195,28 @@ class SortingNode(Node):
 
     def _check_stuck(self):
         """Check if robot is stuck (distance not improving)."""
+        # Don't check for stuck if very close to goal (robot might be fine-tuning position)
+        current_dist = self._distance_to_goal()
+        if current_dist < 1.0:
+            return False
+        
         if self._last_stuck_check is None:
             self._last_stuck_check = time.time()
-            self._last_stuck_dist = self._distance_to_goal()
+            self._last_stuck_dist = current_dist
             return False
         
         # Check every 15 seconds (more lenient)
         if time.time() - self._last_stuck_check > 15.0:
-            current_dist = self._distance_to_goal()
-            # If distance hasn't improved by at least 0.2m in 15 seconds, consider stuck
-            if abs(current_dist - self._last_stuck_dist) < 0.2:
+            # If robot is close to goal (< 1.5m), be more lenient with stuck detection
+            if current_dist < 1.5:
+                # When close, require less improvement (0.1m instead of 0.2m)
+                improvement_threshold = 0.1
+            else:
+                # When far, require more improvement
+                improvement_threshold = 0.2
+            
+            # If distance hasn't improved by threshold in 15 seconds, consider stuck
+            if abs(current_dist - self._last_stuck_dist) < improvement_threshold:
                 self.get_logger().warn(f"Robot appears stuck: dist={current_dist:.2f}m (no improvement)")
                 return True
             self._last_stuck_check = time.time()
@@ -215,8 +229,8 @@ class SortingNode(Node):
         from gazebo_msgs.msg import EntityState
         
         reset_cli = self.create_client(SetEntityState, "/set_entity_state")
-        if not reset_cli.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warn("Cannot reset robot - service unavailable")
+        if not reset_cli.wait_for_service(timeout_sec=1.0):  # Quick check
+            self.get_logger().warn("Reset service not available - skipping reset")
             return False
         
         # Reset to workspace center
@@ -229,14 +243,25 @@ class SortingNode(Node):
         req.state.pose.orientation.w = 1.0
         
         future = reset_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)  # Increased timeout
         
-        # Check if future is done and get result once
-        if not future.done():
-            self.get_logger().warn("Reset service call timed out")
+        # Wait with shorter timeout and don't block
+        try:
+            rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)  # Shorter timeout
+        except Exception as e:
+            self.get_logger().warn(f"Exception waiting for reset service: {e}")
             return False
         
-        result = future.result()
+        # Check if future is done
+        if not future.done():
+            self.get_logger().warn("Reset service call timed out - service may be slow")
+            return False
+        
+        try:
+            result = future.result()
+        except Exception as e:
+            self.get_logger().warn(f"Exception getting reset result: {e}")
+            return False
+            
         if result is None:
             self.get_logger().warn("Reset service call returned None")
             return False
@@ -440,12 +465,28 @@ def main(args=None):
     rclpy.init(args=args)
     node = SortingNode()
     
+    # Handle SIGINT gracefully
+    def signal_handler(sig, frame):
+        node.get_logger().info("Received interrupt signal, shutting down...")
+        try:
+            node.destroy_node()
+            rclpy.shutdown()
+        except:
+            pass
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    
     # Spawn robot in Gazebo before starting
     if not spawn_tb3(node):
         node.get_logger().error("TB3 spawn failed - make sure Gazebo is running")
         node.get_logger().error("Launch Gazebo first: ./launch_warehouse.sh")
         node.destroy_node()
-        rclpy.shutdown()
+        # Don't shutdown here - let finally block handle it
+        try:
+            rclpy.shutdown()
+        except:
+            pass
         return
     
     node.get_logger().info("Robot spawned successfully. Starting sorting tasks...")
@@ -455,8 +496,11 @@ def main(args=None):
     except KeyboardInterrupt:
         node.get_logger().info("Shutting down sorting node...")
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+            rclpy.shutdown()
+        except:
+            pass  # Ignore errors if already shut down
 
 
 if __name__ == "__main__":
