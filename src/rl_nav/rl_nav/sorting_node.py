@@ -76,7 +76,7 @@ class SortingNode(Node):
         self.pose = np.zeros(3, dtype=np.float32)
         self.current_goal = None
         self.task_class = None  # 'A', 'B', or 'C'
-        self.goal_reached_threshold = SUCCESS_RADIUS
+        self.goal_reached_threshold = 0.8  # Slightly more lenient than training (0.6m)
         self.task_queue = []
         self.current_task = None
         self.phase = "IDLE"  # IDLE → GO_PICKUP → GO_DROPOFF → IDLE
@@ -186,11 +186,11 @@ class SortingNode(Node):
             self._last_stuck_dist = self._distance_to_goal()
             return False
         
-        # Check every 10 seconds
-        if time.time() - self._last_stuck_check > 10.0:
+        # Check every 15 seconds (more lenient)
+        if time.time() - self._last_stuck_check > 15.0:
             current_dist = self._distance_to_goal()
-            # If distance hasn't improved by at least 0.1m in 10 seconds, consider stuck
-            if abs(current_dist - self._last_stuck_dist) < 0.1:
+            # If distance hasn't improved by at least 0.2m in 15 seconds, consider stuck
+            if abs(current_dist - self._last_stuck_dist) < 0.2:
                 self.get_logger().warn(f"Robot appears stuck: dist={current_dist:.2f}m (no improvement)")
                 return True
             self._last_stuck_check = time.time()
@@ -219,13 +219,20 @@ class SortingNode(Node):
         future = reset_cli.call_async(req)
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
         
-        if future.result():
+        if future.result() is None:
+            self.get_logger().warn("Reset service call returned None")
+            return False
+        
+        if future.result() and future.result().success:
             self.get_logger().info("Robot position reset to workspace center")
             # Reset stuck detection after successful reset
             self._last_stuck_check = None
             self._last_stuck_dist = None
             return True
-        return False
+        else:
+            if future.result():
+                self.get_logger().warn("Reset failed: service returned success=False")
+            return False
 
     def _virtual_pickup(self, item_name, task_class):
         """Virtual pickup: delete item from pickup zone."""
