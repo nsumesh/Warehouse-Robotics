@@ -76,7 +76,8 @@ class SortingNode(Node):
         self.pose = np.zeros(3, dtype=np.float32)
         self.current_goal = None
         self.task_class = None  # 'A', 'B', or 'C'
-        self.goal_reached_threshold = 0.8  # Slightly more lenient than training (0.6m)
+        self.goal_reached_threshold = 0.7  # Closer to training threshold (0.6m)
+        self._goal_reached_time = None  # Track when goal was first reached (for stability check)
         self.task_queue = []
         self.current_task = None
         self.phase = "IDLE"  # IDLE → GO_PICKUP → GO_DROPOFF → IDLE
@@ -168,8 +169,19 @@ class SortingNode(Node):
         return float(math.hypot(dx, dy))
 
     def _goal_reached(self):
-        """Check if goal reached."""
-        return self._distance_to_goal() < self.goal_reached_threshold
+        """Check if goal reached (with stability check)."""
+        dist = self._distance_to_goal()
+        if dist < self.goal_reached_threshold:
+            # Goal is close - check if it's been close for at least 2 seconds
+            now = time.time()
+            if self._goal_reached_time is None:
+                self._goal_reached_time = now
+            elif now - self._goal_reached_time >= 2.0:  # Stable for 2 seconds
+                return True
+        else:
+            # Reset timer if we're not close anymore
+            self._goal_reached_time = None
+        return False
 
     def _check_collision(self):
         """Check if robot is too close to obstacles."""
@@ -217,21 +229,26 @@ class SortingNode(Node):
         req.state.pose.orientation.w = 1.0
         
         future = reset_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)  # Increased timeout
         
-        if future.result() is None:
+        # Check if future is done and get result once
+        if not future.done():
+            self.get_logger().warn("Reset service call timed out")
+            return False
+        
+        result = future.result()
+        if result is None:
             self.get_logger().warn("Reset service call returned None")
             return False
         
-        if future.result() and future.result().success:
+        if result.success:
             self.get_logger().info("Robot position reset to workspace center")
             # Reset stuck detection after successful reset
             self._last_stuck_check = None
             self._last_stuck_dist = None
             return True
         else:
-            if future.result():
-                self.get_logger().warn("Reset failed: service returned success=False")
+            self.get_logger().warn("Reset failed: service returned success=False")
             return False
 
     def _virtual_pickup(self, item_name, task_class):
@@ -335,6 +352,7 @@ class SortingNode(Node):
             self.phase = "GO_PICKUP"
             self.task_start_time = now
             self.current_goal = self.pickup_location
+            self._goal_reached_time = None  # Reset goal reached timer
             self.task_class = None  # No task class yet (not picked up)
             self.get_logger().info(f"[Task] {self.current_task}: Going to PICKUP @ ({self.pickup_location[0]:.1f}, {self.pickup_location[1]:.1f})")
 
@@ -344,6 +362,7 @@ class SortingNode(Node):
             self.task_start_time = now
             self.task_class = self.current_task  # Set task class for PPO observation
             self.current_goal = self.drop_docks[self.task_class]
+            self._goal_reached_time = None  # Reset goal reached timer
             
             # Virtual pickup
             item_name = f"item_{self.task_class}_{random.randint(1, 10)}"
@@ -364,7 +383,7 @@ class SortingNode(Node):
             self.task_start_time = None
             
             if not self.task_queue:
-                self.get_logger().info("🎉 All tasks completed!")
+                self.get_logger().info("All tasks completed!")
 
     def _advance_phase(self):
         """Advance to next phase on timeout."""
@@ -373,6 +392,7 @@ class SortingNode(Node):
             self.phase = "GO_DROPOFF"
             self.task_class = self.current_task
             self.current_goal = self.drop_docks[self.task_class]
+            self._goal_reached_time = None  # Reset goal reached timer
             self.task_start_time = time.time()
         elif self.phase == "GO_DROPOFF":
             # Skip dropoff, mark task as failed
