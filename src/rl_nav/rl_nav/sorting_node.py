@@ -19,8 +19,8 @@ from nav_msgs.msg import Odometry
 from gazebo_msgs.srv import SpawnEntity, DeleteEntity
 from stable_baselines3 import PPO
 
-# Import constants from train_ppo.py
-from rl_nav.train_ppo import DOCK_A, DOCK_B, DOCK_C, PICKUP, SUCCESS_RADIUS
+# Import constants and spawn function from train_ppo.py
+from rl_nav.train_ppo import DOCK_A, DOCK_B, DOCK_C, PICKUP, SUCCESS_RADIUS, spawn_tb3
 
 
 class SortingNode(Node):
@@ -310,10 +310,21 @@ class SortingNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = SortingNode()
+    
+    # Spawn robot in Gazebo before starting
+    if not spawn_tb3(node):
+        node.get_logger().error("TB3 spawn failed - make sure Gazebo is running")
+        node.get_logger().error("Launch Gazebo first: ./launch_warehouse.sh")
+        node.destroy_node()
+        rclpy.shutdown()
+        return
+    
+    node.get_logger().info("Robot spawned successfully. Starting sorting tasks...")
+    
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info("Shutting down sorting node...")
     finally:
         node.destroy_node()
         rclpy.shutdown()
