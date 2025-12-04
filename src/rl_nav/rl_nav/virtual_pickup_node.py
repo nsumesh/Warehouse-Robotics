@@ -73,7 +73,7 @@ class VirtualPickupNode(Node):
     def _camera_cb(self, msg):
         """Process camera image."""
         if self.bridge:
-        try:
+            try:
                 self.camera_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
             except Exception:
                 pass
