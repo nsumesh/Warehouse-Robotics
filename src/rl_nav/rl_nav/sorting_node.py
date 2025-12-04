@@ -81,7 +81,8 @@ class SortingNode(Node):
         self.current_task = None
         self.phase = "IDLE"  # IDLE → GO_PICKUP → GO_DROPOFF → IDLE
         self.task_start_time = None
-        self.max_task_time = 120.0
+        self.max_task_time = 180.0  # Increased timeout for better navigation
+        self._last_log_time = None  # For debug logging
 
         # Virtual items (for simulation)
         self.items_at_pickup = []  # List of item names at pickup zone
@@ -135,15 +136,20 @@ class SortingNode(Node):
         dx, dy = (np.array(self.current_goal) - self.pose[:2])
         tail = np.array([dx, dy, self.pose[2]], dtype=np.float32)
         
-        # Task class one-hot (3 dims) - CRITICAL for Stage 3
-        if self.task_class == 'A':
-            task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        elif self.task_class == 'B':
-            task_onehot = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-        elif self.task_class == 'C':
-            task_onehot = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        # Task class one-hot (3 dims)
+        # During GO_PICKUP: use dummy [1,0,0] (model should still work for basic navigation)
+        # During GO_DROPOFF: use actual task class for Stage 3 model
+        if self.phase == "GO_DROPOFF" and self.task_class:
+            if self.task_class == 'A':
+                task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+            elif self.task_class == 'B':
+                task_onehot = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+            elif self.task_class == 'C':
+                task_onehot = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+            else:
+                task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
         else:
-            # Default (shouldn't happen during GO_DROPOFF, but safe fallback)
+            # GO_PICKUP or no task class: use dummy encoding
             task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
         
         return np.concatenate([scan, tail, task_onehot], axis=0)
@@ -296,11 +302,25 @@ class SortingNode(Node):
 
         obs = self._obs()
         if obs is None:
+            # Log when observation is None
+            if self.scan is None:
+                self.get_logger().warn("Waiting for LiDAR scan...")
             return
 
         # Use Stage 3 model (expects 30-dim obs with task_class one-hot)
         action, _ = self.model.predict(obs, deterministic=True)
         v, w = self.actions[int(action)]
+        
+        # Log periodically to debug
+        if self._last_log_time is not None:
+            if time.time() - self._last_log_time > 5.0:
+                dist = self._distance_to_goal()
+                self.get_logger().info(f"[Control] phase={self.phase} goal={self.current_goal} "
+                                     f"dist={dist:.2f}m task_class={self.task_class}")
+                self._last_log_time = time.time()
+        else:
+            self._last_log_time = time.time()
+        
         msg = Twist()
         msg.linear.x = float(v)
         msg.angular.z = float(w)
