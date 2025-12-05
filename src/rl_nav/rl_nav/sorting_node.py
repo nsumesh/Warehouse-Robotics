@@ -161,7 +161,7 @@ class SortingNode(Node):
 
     def _build_initial_tasks(self, num_tasks=5):
         """Build initial task queue with random categories."""
-        self.task_queue = [random.choice(['A', 'B', 'C']) for _ in range(num_tasks)]
+        self.task_queue = [random.choice(['A'])]
 
     def _distance_to_goal(self):
         """Calculate distance to goal."""
@@ -288,7 +288,7 @@ class SortingNode(Node):
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
         
         if future.result() and future.result().success:
-            self.get_logger().info(f"✓ Picked up {task_class} item: {item_name}")
+            self.get_logger().info(f"Picked up {task_class} item: {item_name}")
             return True
         else:
             self.get_logger().warn(f"Failed to delete {item_name} - simulating pickup")
@@ -331,7 +331,7 @@ class SortingNode(Node):
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
         
         if future.result():
-            self.get_logger().info(f"✓ Dropped {task_class} item at DOCK_{task_class} ({dock_x:.1f}, {dock_y:.1f})")
+            self.get_logger().info(f"Dropped {task_class} item at DOCK_{task_class} ({dock_x:.1f}, {dock_y:.1f})")
             return True
         else:
             self.get_logger().warn(f"Failed to spawn at dock - simulating dropoff")
@@ -398,7 +398,7 @@ class SortingNode(Node):
         elif self.phase == "GO_DROPOFF" and self._goal_reached():
             # Reached dock: drop off item
             self._virtual_dropoff(self.task_class)
-            self.get_logger().info(f"[Task] ✓ Completed sorting {self.current_task} item")
+            self.get_logger().info(f"[Task] Completed sorting {self.current_task} item")
             
             # Reset for next task
             self.current_task = None
