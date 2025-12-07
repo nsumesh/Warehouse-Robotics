@@ -89,20 +89,19 @@ class SortingNode(Node):
         self._last_stuck_check = None  # For stuck detection
         self._last_stuck_dist = None  # For stuck detection
 
-        # Virtual items (for simulation)
-        self.items_at_pickup = []  # List of item names at pickup zone
-        self._initialize_items()
+        # Object tracking: maps task_class -> list of item IDs
+        self.items_at_pickup = {}  # Maps task_class -> list of item IDs
+        self.active_items = {}  # Maps item_id -> {'task_class': 'A', 'spawned': True, 'picked': False}
+        self.item_counter = {'A': 0, 'B': 0, 'C': 0}  # Counter for unique IDs
+        self.current_item_id = None  # Store current item ID for dropoff
 
         # Initialize
         self._build_initial_tasks(5)
+        # Spawn items at pickup point
+        self._spawn_initial_items()
         self.control_timer = self.create_timer(0.15, self.control_step)
         self.task_timer = self.create_timer(0.5, self.task_manager)
         self.get_logger().info(f"SortingNode initialized. Task queue: {self.task_queue}")
-
-    def _initialize_items(self):
-        """Initialize virtual items at pickup zone."""
-        # You can spawn items here or assume they exist in Gazebo
-        self.items_at_pickup = ["item_A_1", "item_B_1", "item_C_1", "item_A_2", "item_B_2"]
 
     def _scan_cb(self, msg):
         """Process LiDAR scan into 24 bins (match training)."""
@@ -160,8 +159,24 @@ class SortingNode(Node):
         return np.concatenate([scan, tail, task_onehot], axis=0)
 
     def _build_initial_tasks(self, num_tasks=5):
-        """Build initial task queue with random categories."""
-        self.task_queue = [random.choice(['A'])]
+        """Build task queue and assign item IDs."""
+        categories = ['A', 'B', 'C']
+        self.task_queue = [random.choice(categories) for _ in range(num_tasks)]
+        
+        # Initialize items_at_pickup dictionary
+        for task_class in categories:
+            self.items_at_pickup[task_class] = []
+        
+        # Assign IDs based on task queue
+        for task_class in self.task_queue:
+            self.item_counter[task_class] += 1
+            item_id = f"item_{task_class}_{self.item_counter[task_class]}"
+            self.items_at_pickup[task_class].append(item_id)
+            self.active_items[item_id] = {
+                'task_class': task_class,
+                'spawned': False,
+                'picked': False
+            }
 
     def _distance_to_goal(self):
         """Calculate distance to goal."""
@@ -223,6 +238,107 @@ class SortingNode(Node):
             self._last_stuck_dist = current_dist
         return False
 
+    def _generate_item_sdf(self, item_name, color_rgba):
+        """Generate SDF for a sortable item box."""
+        size = [0.2, 0.2, 0.3]  # 20cm x 20cm x 30cm box
+        mass = 0.5
+        
+        # Calculate inertia (for box: I = m/12 * (h^2 + d^2))
+        ixx = (mass / 12.0) * (size[1]**2 + size[2]**2)
+        iyy = (mass / 12.0) * (size[0]**2 + size[2]**2)
+        izz = (mass / 12.0) * (size[0]**2 + size[1]**2)
+        
+        sdf = f"""<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="{item_name}">
+    <static>false</static>
+    <pose>0 0 0 0 0 0</pose>
+    <link name="link">
+      <inertial>
+        <mass>{mass}</mass>
+        <inertia>
+          <ixx>{ixx}</ixx>
+          <iyy>{iyy}</iyy>
+          <izz>{izz}</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><box><size>{size[0]} {size[1]} {size[2]}</size></box></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><box><size>{size[0]} {size[1]} {size[2]}</size></box></geometry>
+        <material>
+          <ambient>{color_rgba[0]} {color_rgba[1]} {color_rgba[2]} {color_rgba[3]}</ambient>
+          <diffuse>{color_rgba[0]} {color_rgba[1]} {color_rgba[2]} {color_rgba[3]}</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>"""
+        return sdf
+
+    def _spawn_item(self, item_name, item_sdf, x, y, z):
+        """Spawn a single item in Gazebo."""
+        req = SpawnEntity.Request()
+        req.name = item_name
+        req.xml = item_sdf
+        req.robot_namespace = ""
+        req.reference_frame = "world"
+        
+        future = self.spawn_client.call_async(req)
+        try:
+            rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)
+            if future.result() and future.result().success:
+                return True
+        except Exception as e:
+            self.get_logger().warn(f"Exception spawning {item_name}: {e}")
+        return False
+
+    def _spawn_initial_items(self):
+        """Spawn all items at pickup point based on task queue."""
+        if not self.spawn_client.service_is_ready():
+            self.get_logger().warn("Spawn service not ready - items won't be spawned")
+            return
+        
+        pickup_x, pickup_y = self.pickup_location
+        
+        # Color mapping for visual distinction
+        colors = {
+            'A': [0.8, 0.2, 0.2, 1.0],  # Red
+            'B': [0.2, 0.8, 0.2, 1.0],  # Green
+            'C': [0.2, 0.2, 0.8, 1.0],  # Blue
+        }
+        
+        # Spawn items in a grid pattern at pickup point
+        spacing = 0.3  # 30cm spacing between items
+        items_per_row = 3
+        
+        for task_class, item_list in self.items_at_pickup.items():
+            for idx, item_id in enumerate(item_list):
+                row = idx // items_per_row
+                col = idx % items_per_row
+                
+                # Calculate position offset from pickup center
+                offset_x = (col - items_per_row/2 + 0.5) * spacing
+                offset_y = row * spacing
+                
+                item_x = pickup_x + offset_x
+                item_y = pickup_y + offset_y
+                item_z = 0.15  # Half of box height (0.3m box)
+                
+                # Generate SDF for this item
+                item_sdf = self._generate_item_sdf(item_id, colors[task_class])
+                
+                # Spawn item
+                if self._spawn_item(item_id, item_sdf, item_x, item_y, item_z):
+                    self.active_items[item_id]['spawned'] = True
+                    self.get_logger().info(f"Spawned {item_id} at pickup ({item_x:.2f}, {item_y:.2f})")
+                else:
+                    self.get_logger().warn(f"Failed to spawn {item_id}")
+
     def _reset_robot_position(self):
         """Reset robot to a safe position when stuck."""
         from gazebo_msgs.srv import SetEntityState
@@ -278,6 +394,10 @@ class SortingNode(Node):
 
     def _virtual_pickup(self, item_name, task_class):
         """Virtual pickup: delete item from pickup zone."""
+        # Mark item as picked in tracking
+        if item_name in self.active_items:
+            self.active_items[item_name]['picked'] = True
+        
         if not self.delete_client.service_is_ready():
             self.get_logger().warn("Gazebo service not ready - simulating pickup")
             return True
@@ -294,44 +414,30 @@ class SortingNode(Node):
             self.get_logger().warn(f"Failed to delete {item_name} - simulating pickup")
             return True  # Continue anyway
 
-    def _virtual_dropoff(self, task_class):
+    def _virtual_dropoff(self, task_class, item_id=None):
         """Virtual dropoff: spawn item at dock."""
+        if item_id is None:
+            item_id = f"sorted_{task_class}_{int(time.time())}"
+        
         if not self.spawn_client.service_is_ready():
-            self.get_logger().warn("Gazebo service not ready - simulating dropoff")
+            self.get_logger().warn("Spawn service not ready - simulating dropoff")
             return True
         
         dock_x, dock_y = self.drop_docks[task_class]
-        item_sdf = f"""<?xml version="1.0"?>
-<sdf version="1.6">
-  <model name="sorted_{task_class}_{int(time.time())}">
-    <static>false</static>
-    <pose>{dock_x} {dock_y} 0.1 0 0 0</pose>
-    <link name="link">
-      <collision name="collision">
-        <geometry><box><size>0.2 0.2 0.2</size></box></geometry>
-      </collision>
-      <visual name="visual">
-        <geometry><box><size>0.2 0.2 0.2</size></box></geometry>
-        <material>
-          <ambient>0.8 0.2 0.2 1</ambient>
-          <diffuse>0.8 0.2 0.2 1</diffuse>
-        </material>
-      </visual>
-    </link>
-  </model>
-</sdf>"""
         
-        req = SpawnEntity.Request()
-        req.name = f"sorted_{task_class}_{int(time.time())}"
-        req.xml = item_sdf
-        req.robot_namespace = ""
-        req.reference_frame = "world"
+        # Use same color as pickup for consistency
+        colors = {
+            'A': [0.8, 0.2, 0.2, 1.0],  # Red
+            'B': [0.2, 0.8, 0.2, 1.0],  # Green
+            'C': [0.2, 0.2, 0.8, 1.0],  # Blue
+        }
         
-        future = self.spawn_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        # Generate SDF with same properties as pickup item
+        item_sdf = self._generate_item_sdf(item_id, colors[task_class])
         
-        if future.result():
-            self.get_logger().info(f"Dropped {task_class} item at DOCK_{task_class} ({dock_x:.1f}, {dock_y:.1f})")
+        # Spawn at dock location
+        if self._spawn_item(item_id, item_sdf, dock_x, dock_y, 0.15):
+            self.get_logger().info(f"Dropped {task_class} item ({item_id}) at DOCK_{task_class} ({dock_x:.1f}, {dock_y:.1f})")
             return True
         else:
             self.get_logger().warn(f"Failed to spawn at dock - simulating dropoff")
@@ -389,20 +495,33 @@ class SortingNode(Node):
             self.current_goal = self.drop_docks[self.task_class]
             self._goal_reached_time = None  # Reset goal reached timer
             
-            # Virtual pickup
-            item_name = f"item_{self.task_class}_{random.randint(1, 10)}"
-            self._virtual_pickup(item_name, self.task_class)
+            # Get the item ID for this task
+            if self.items_at_pickup.get(self.current_task) and len(self.items_at_pickup[self.current_task]) > 0:
+                item_id = self.items_at_pickup[self.current_task].pop(0)  # Get first item of this class
+            else:
+                # Fallback if no items available
+                self.item_counter[self.current_task] += 1
+                item_id = f"item_{self.current_task}_{self.item_counter[self.current_task]}"
+                self.get_logger().warn(f"No items available for {self.current_task}, using fallback ID: {item_id}")
             
-            self.get_logger().info(f"[Task] {self.current_task}: Picked up. Going to DOCK_{self.current_task} @ ({self.current_goal[0]:.1f}, {self.current_goal[1]:.1f})")
+            # Store item_id for dropoff
+            self.current_item_id = item_id
+            
+            # Virtual pickup: delete item from pickup zone
+            self._virtual_pickup(item_id, self.task_class)
+            
+            self.get_logger().info(f"[Task] {self.current_task}: Picked up {item_id}. Going to DOCK_{self.current_task} @ ({self.current_goal[0]:.1f}, {self.current_goal[1]:.1f})")
 
         elif self.phase == "GO_DROPOFF" and self._goal_reached():
             # Reached dock: drop off item
-            self._virtual_dropoff(self.task_class)
-            self.get_logger().info(f"[Task] Completed sorting {self.current_task} item")
+            item_id = getattr(self, 'current_item_id', None)
+            self._virtual_dropoff(self.task_class, item_id)
+            self.get_logger().info(f"[Task] ✓ Completed sorting {self.current_task} item")
             
             # Reset for next task
             self.current_task = None
             self.task_class = None
+            self.current_item_id = None
             self.phase = "IDLE"
             self.current_goal = None
             self.task_start_time = None
@@ -460,6 +579,23 @@ class SortingNode(Node):
         msg.angular.z = float(w)
         self.cmd_pub.publish(msg)
 
+    def cleanup_items(self):
+        """Clean up all spawned items on shutdown."""
+        if not self.delete_client.service_is_ready():
+            return
+        
+        for item_id in list(self.active_items.keys()):
+            if self.active_items[item_id]['spawned']:
+                req = DeleteEntity.Request()
+                req.name = item_id
+                future = self.delete_client.call_async(req)
+                try:
+                    rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
+                    if future.result() and future.result().success:
+                        self.get_logger().info(f"Cleaned up {item_id}")
+                except Exception as e:
+                    self.get_logger().warn(f"Exception cleaning up {item_id}: {e}")
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -497,6 +633,7 @@ def main(args=None):
         node.get_logger().info("Shutting down sorting node...")
     finally:
         try:
+            node.cleanup_items()
             node.destroy_node()
             rclpy.shutdown()
         except:
