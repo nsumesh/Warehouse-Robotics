@@ -88,6 +88,8 @@ class SortingNode(Node):
         self._last_log_time = None  # For debug logging
         self._last_stuck_check = None  # For stuck detection
         self._last_stuck_dist = None  # For stuck detection
+        self._collision_check_enabled = False  # Delay collision checking
+        self._start_time = None  # Track when node started
 
         # Object tracking: maps task_class -> list of item IDs
         self.items_at_pickup = {}  # Maps task_class -> list of item IDs
@@ -204,9 +206,15 @@ class SortingNode(Node):
         """Check if robot is too close to obstacles."""
         if self.scan is None:
             return False
+        
+        # Ensure scan is valid (not all NaN or invalid)
+        valid_scan = self.scan[~np.isnan(self.scan)]
+        if len(valid_scan) == 0:
+            return False
+        
         # Check if any LiDAR reading is very close (collision threshold)
-        min_dist = np.min(self.scan) * 3.5  # Convert normalized to meters
-        return min_dist < 0.2  # 20cm threshold
+        min_dist = np.min(valid_scan) * 3.5  # Convert normalized to meters
+        return min_dist < 0.15  # Reduced from 0.2 to 0.15m (15cm threshold)
 
     def _check_stuck(self):
         """Check if robot is stuck (distance not improving)."""
@@ -282,11 +290,18 @@ class SortingNode(Node):
 
     def _spawn_item(self, item_name, item_sdf, x, y, z):
         """Spawn a single item in Gazebo."""
+        from geometry_msgs.msg import Pose, Point, Quaternion
+        
         req = SpawnEntity.Request()
         req.name = item_name
         req.xml = item_sdf
         req.robot_namespace = ""
         req.reference_frame = "world"
+        
+        # Set pose - required for items to spawn at correct location
+        req.initial_pose = Pose()
+        req.initial_pose.position = Point(x=float(x), y=float(y), z=float(z))
+        req.initial_pose.orientation = Quaternion(w=1.0)  # No rotation
         
         future = self.spawn_client.call_async(req)
         try:
@@ -303,6 +318,7 @@ class SortingNode(Node):
             self.get_logger().warn("Spawn service not ready - items won't be spawned")
             return
         
+        self.get_logger().info(f"Attempting to spawn items: {self.items_at_pickup}")
         pickup_x, pickup_y = self.pickup_location
         
         # Color mapping for visual distinction
@@ -449,7 +465,14 @@ class SortingNode(Node):
 
         # Check for collision or stuck (only during active navigation)
         if self.phase in ["GO_PICKUP", "GO_DROPOFF"]:
-            if self._check_collision():
+            # Enable collision checking after 2 seconds (let robot settle)
+            if self._start_time is None:
+                self._start_time = time.time()
+            if time.time() - self._start_time >= 2.0:
+                self._collision_check_enabled = True
+            
+            # Only check collisions after delay
+            if self._collision_check_enabled and self._check_collision():
                 self.get_logger().warn("Collision detected! Resetting robot position...")
                 if self._reset_robot_position():
                     # Reset task start time to give it another chance
