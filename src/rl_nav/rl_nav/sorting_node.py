@@ -96,11 +96,11 @@ class SortingNode(Node):
         self.active_items = {}  # Maps item_id -> {'task_class': 'A', 'spawned': True, 'picked': False}
         self.item_counter = {'A': 0, 'B': 0, 'C': 0}  # Counter for unique IDs
         self.current_item_id = None  # Store current item ID for dropoff
+        self._items_spawned_for_current_task = False  # Track if items spawned for current task
 
         # Initialize
         self._build_initial_tasks(5)
-        # Spawn items at pickup point
-        self._spawn_initial_items()
+        # Don't spawn items immediately - wait until robot is close to pickup
         self.control_timer = self.create_timer(0.15, self.control_step)
         self.task_timer = self.create_timer(0.5, self.task_manager)
         self.get_logger().info(f"SortingNode initialized. Task queue: {self.task_queue}")
@@ -312,13 +312,22 @@ class SortingNode(Node):
             self.get_logger().warn(f"Exception spawning {item_name}: {e}")
         return False
 
-    def _spawn_initial_items(self):
-        """Spawn all items at pickup point based on task queue."""
+    def _spawn_items_for_current_task(self):
+        """Spawn items for the current task class at pickup point when robot is close."""
         if not self.spawn_client.service_is_ready():
             self.get_logger().warn("Spawn service not ready - items won't be spawned")
-            return
+            return False
         
-        self.get_logger().info(f"Attempting to spawn items: {self.items_at_pickup}")
+        if self.current_task is None:
+            return False
+        
+        # Get items for current task class
+        task_class = self.current_task
+        if task_class not in self.items_at_pickup or len(self.items_at_pickup[task_class]) == 0:
+            self.get_logger().warn(f"No items available for task class {task_class}")
+            return False
+        
+        self.get_logger().info(f"Spawning items for task {task_class} at pickup point")
         pickup_x, pickup_y = self.pickup_location
         
         # Color mapping for visual distinction
@@ -332,28 +341,40 @@ class SortingNode(Node):
         spacing = 0.3  # 30cm spacing between items
         items_per_row = 3
         
-        for task_class, item_list in self.items_at_pickup.items():
-            for idx, item_id in enumerate(item_list):
-                row = idx // items_per_row
-                col = idx % items_per_row
-                
-                # Calculate position offset from pickup center
-                offset_x = (col - items_per_row/2 + 0.5) * spacing
-                offset_y = row * spacing
-                
-                item_x = pickup_x + offset_x
-                item_y = pickup_y + offset_y
-                item_z = 0.15  # Half of box height (0.3m box)
-                
-                # Generate SDF for this item
-                item_sdf = self._generate_item_sdf(item_id, colors[task_class])
-                
-                # Spawn item
-                if self._spawn_item(item_id, item_sdf, item_x, item_y, item_z):
-                    self.active_items[item_id]['spawned'] = True
-                    self.get_logger().info(f"Spawned {item_id} at pickup ({item_x:.2f}, {item_y:.2f})")
-                else:
-                    self.get_logger().warn(f"Failed to spawn {item_id}")
+        item_list = self.items_at_pickup[task_class]
+        spawned_count = 0
+        
+        for idx, item_id in enumerate(item_list):
+            # Only spawn items that haven't been spawned yet
+            if item_id in self.active_items and self.active_items[item_id]['spawned']:
+                continue  # Already spawned
+            
+            row = idx // items_per_row
+            col = idx % items_per_row
+            
+            # Calculate position offset from pickup center
+            offset_x = (col - items_per_row/2 + 0.5) * spacing
+            offset_y = row * spacing
+            
+            item_x = pickup_x + offset_x
+            item_y = pickup_y + offset_y
+            item_z = 0.15  # Half of box height (0.3m box)
+            
+            # Generate SDF for this item
+            item_sdf = self._generate_item_sdf(item_id, colors[task_class])
+            
+            # Spawn item
+            if self._spawn_item(item_id, item_sdf, item_x, item_y, item_z):
+                self.active_items[item_id]['spawned'] = True
+                spawned_count += 1
+                self.get_logger().info(f"Spawned {item_id} at pickup ({item_x:.2f}, {item_y:.2f})")
+            else:
+                self.get_logger().warn(f"Failed to spawn {item_id}")
+        
+        if spawned_count > 0:
+            self.get_logger().info(f"Spawned {spawned_count} items for task {task_class}")
+            return True
+        return False
 
     def _reset_robot_position(self):
         """Reset robot to a safe position when stuck."""
@@ -508,39 +529,49 @@ class SortingNode(Node):
             self.current_goal = self.pickup_location
             self._goal_reached_time = None  # Reset goal reached timer
             self.task_class = None  # No task class yet (not picked up)
+            self._items_spawned_for_current_task = False  # Reset spawn flag for new task
             self.get_logger().info(f"[Task] {self.current_task}: Going to PICKUP @ ({self.pickup_location[0]:.1f}, {self.pickup_location[1]:.1f})")
 
-        elif self.phase == "GO_PICKUP" and self._goal_reached():
-            # Reached pickup: assign task class and go to dock
-            self.phase = "GO_DROPOFF"
-            self.task_start_time = now
-            self.task_class = self.current_task  # Set task class for PPO observation
-            self.current_goal = self.drop_docks[self.task_class]
-            self._goal_reached_time = None  # Reset goal reached timer
+        elif self.phase == "GO_PICKUP":
+            # Check if robot is close enough to spawn items (within 1.5m)
+            dist_to_pickup = self._distance_to_goal()
+            if dist_to_pickup < 1.5 and not self._items_spawned_for_current_task:
+                # Spawn items now (only once per task)
+                if self._spawn_items_for_current_task():
+                    self._items_spawned_for_current_task = True
             
-            # Get the item ID for this task
-            if self.items_at_pickup.get(self.current_task) and len(self.items_at_pickup[self.current_task]) > 0:
-                item_id = self.items_at_pickup[self.current_task].pop(0)  # Get first item of this class
-            else:
-                # Fallback if no items available
-                self.item_counter[self.current_task] += 1
-                item_id = f"item_{self.current_task}_{self.item_counter[self.current_task]}"
-                self.get_logger().warn(f"No items available for {self.current_task}, using fallback ID: {item_id}")
-            
-            # Store item_id for dropoff
-            self.current_item_id = item_id
-            
-            # Virtual pickup: delete item from pickup zone
-            self._virtual_pickup(item_id, self.task_class)
-            
-            self.get_logger().info(f"[Task] {self.current_task}: Picked up {item_id}. Going to DOCK_{self.current_task} @ ({self.current_goal[0]:.1f}, {self.current_goal[1]:.1f})")
+            # Check if goal reached
+            if self._goal_reached():
+                # Reached pickup: assign task class and go to dock
+                self.phase = "GO_DROPOFF"
+                self.task_start_time = now
+                self.task_class = self.current_task  # Set task class for PPO observation
+                self.current_goal = self.drop_docks[self.task_class]
+                self._goal_reached_time = None  # Reset goal reached timer
+                
+                # Get the item ID for this task
+                if self.items_at_pickup.get(self.current_task) and len(self.items_at_pickup[self.current_task]) > 0:
+                    item_id = self.items_at_pickup[self.current_task].pop(0)  # Get first item of this class
+                else:
+                    # Fallback if no items available
+                    self.item_counter[self.current_task] += 1
+                    item_id = f"item_{self.current_task}_{self.item_counter[self.current_task]}"
+                    self.get_logger().warn(f"No items available for {self.current_task}, using fallback ID: {item_id}")
+                
+                # Store item_id for dropoff
+                self.current_item_id = item_id
+                
+                # Virtual pickup: delete item from pickup zone
+                self._virtual_pickup(item_id, self.task_class)
+                
+                self.get_logger().info(f"[Task] {self.current_task}: Picked up {item_id}. Going to DOCK_{self.current_task} @ ({self.current_goal[0]:.1f}, {self.current_goal[1]:.1f})")
 
         elif self.phase == "GO_DROPOFF" and self._goal_reached():
             # Reached dock: drop off item
             item_id = getattr(self, 'current_item_id', None)
             self._virtual_dropoff(self.task_class, item_id)
             self.get_logger().info(f"[Task] ✓ Completed sorting {self.current_task} item")
-            
+                
             # Reset for next task
             self.current_task = None
             self.task_class = None
@@ -550,7 +581,7 @@ class SortingNode(Node):
             self.task_start_time = None
             
             if not self.task_queue:
-                self.get_logger().info("All tasks completed!")
+                    self.get_logger().info("All tasks completed!")
 
     def _advance_phase(self):
         """Advance to next phase on timeout."""
