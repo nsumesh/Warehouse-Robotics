@@ -50,7 +50,7 @@ DOCK_C = (-6.5, 2.0)   # Sorting category C
 PICKUP = (-4.0, 0.0)
 
 # Success and close zone radii (consistent across all methods)
-SUCCESS_RADIUS = 0.6  # Distance threshold for successful docking
+SUCCESS_RADIUS = 0.7  # Distance threshold for successful docking (increased for easier docking)
 CLOSE_RADIUS = 1.5   # Distance threshold for intermediate close bonus
 
 
@@ -486,12 +486,12 @@ class Tb3Env(Node):
         dx, dy = (self.goal - self.pose[:2])
         dist = float(math.hypot(dx, dy))
 
-        # Reward constants - adjusted for better training
-        k_progress = 2.0  # Increased from 1.0
-        k_time = 0.005   # Reduced from 0.01 (less harsh)
+        # Reward constants - tuned for Stage 3 two-phase training
+        k_progress = 3.0  # Increased from 2.0 (encourages faster progress)
+        k_time = 0.003    # Reduced from 0.005 (less time pressure)
         k_collision = 5.0
-        k_success = 10.0
-        k_pickup_success = 5.0  # Reward for reaching pickup (smaller than final success)
+        k_success = 15.0  # Increased from 10.0 (stronger success signal)
+        k_pickup_success = 7.0  # Increased from 5.0 (stronger pickup incentive)
         # SUCCESS_RADIUS and CLOSE_RADIUS are module-level constants (defined at top)
 
         # Progress reward
@@ -567,8 +567,8 @@ class Tb3Env(Node):
                         success = True
                         done = True
                     elif closest_dock[1] < SUCCESS_RADIUS:
-                        # Wrong dock - penalty
-                        r -= 2.0
+                        # Wrong dock - penalty (increased to discourage wrong docks)
+                        r -= 5.0
                         done = True
         
         # For Stage 1/2: standard success check
