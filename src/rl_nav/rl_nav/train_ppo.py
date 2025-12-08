@@ -28,8 +28,9 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
-from gazebo_msgs.srv import SetEntityState, SpawnEntity
+from gazebo_msgs.srv import SetEntityState, SpawnEntity, DeleteEntity
 from gazebo_msgs.msg import EntityState
+from geometry_msgs.msg import Pose, Point, Quaternion
 import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import PPO
@@ -132,7 +133,7 @@ class Tb3Env(Node):
         elif curriculum_stage == 2:
             self.max_steps = 400  # Longer for aisle navigation
         else:  # Stage 3
-            self.max_steps = 500  # Longest for sorting
+            self.max_steps = 600  # Increased for two-phase sorting (pickup + dropoff)
 
         self.in_close_zone = False  # Track if in close zone for one-time bonus
 
@@ -143,6 +144,22 @@ class Tb3Env(Node):
         self.curriculum_stage = curriculum_stage
         self.task_class = None  # For Stage 3: 'A', 'B', or 'C'
         self.metrics_path = None
+        
+        # For Stage 3: two-phase training (GO_PICKUP → GO_DROPOFF)
+        self.phase = None  # "GO_PICKUP" or "GO_DROPOFF" for Stage 3
+        self.pickup_goal = None  # Store pickup location
+        self.dropoff_goal = None  # Store dock location
+        self.pickup_reached = False  # Track if pickup was reached
+        self.pickup_reached_time = None  # Track when pickup was reached (for stability)
+        
+        # Item management for Stage 3
+        self.spawn_client = None
+        self.delete_client = None
+        self.current_item_id = None  # Item ID for current task
+        self.item_counter = {'A': 0, 'B': 0, 'C': 0}  # Counter for unique IDs
+        if curriculum_stage == 3:
+            self.spawn_client = self.create_client(SpawnEntity, "/spawn_entity")
+            self.delete_client = self.create_client(DeleteEntity, "/delete_entity")
 
     def _on_scan(self, msg: LaserScan):
         """Process LiDAR scan into bins."""
@@ -185,6 +202,117 @@ class Tb3Env(Node):
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         self.pose[:] = (x, y, yaw)
 
+    def _generate_item_sdf(self, item_name, color_rgba):
+        """Generate SDF for a sortable item box."""
+        size = [0.2, 0.2, 0.3]  # 20cm x 20cm x 30cm box
+        mass = 0.5
+        
+        # Calculate inertia (for box: I = m/12 * (h^2 + d^2))
+        ixx = (mass / 12.0) * (size[1]**2 + size[2]**2)
+        iyy = (mass / 12.0) * (size[0]**2 + size[2]**2)
+        izz = (mass / 12.0) * (size[0]**2 + size[1]**2)
+        
+        sdf = f"""<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="{item_name}">
+    <static>false</static>
+    <pose>0 0 0 0 0 0</pose>
+    <link name="link">
+      <inertial>
+        <mass>{mass}</mass>
+        <inertia>
+          <ixx>{ixx}</ixx>
+          <iyy>{iyy}</iyy>
+          <izz>{izz}</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><box><size>{size[0]} {size[1]} {size[2]}</size></box></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><box><size>{size[0]} {size[1]} {size[2]}</size></box></geometry>
+        <material>
+          <ambient>{color_rgba[0]} {color_rgba[1]} {color_rgba[2]} {color_rgba[3]}</ambient>
+          <diffuse>{color_rgba[0]} {color_rgba[1]} {color_rgba[2]} {color_rgba[3]}</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>"""
+        return sdf
+
+    def _spawn_item(self, item_name, item_sdf, x, y, z):
+        """Spawn a single item in Gazebo."""
+        if not self.spawn_client or not self.spawn_client.service_is_ready():
+            return False
+        
+        req = SpawnEntity.Request()
+        req.name = item_name
+        req.xml = item_sdf
+        req.robot_namespace = ""
+        req.reference_frame = "world"
+        
+        # Set pose - required for items to spawn at correct location
+        req.initial_pose = Pose()
+        req.initial_pose.position = Point(x=float(x), y=float(y), z=float(z))
+        req.initial_pose.orientation = Quaternion(w=1.0)  # No rotation
+        
+        future = self.spawn_client.call_async(req)
+        try:
+            rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)
+            if future.result() and future.result().success:
+                return True
+        except Exception as e:
+            self.get_logger().warn(f"Exception spawning {item_name}: {e}")
+        return False
+
+    def _spawn_item_at_pickup(self, task_class):
+        """Spawn a single item at pickup point for the given task class."""
+        if not self.spawn_client or not self.spawn_client.service_is_ready():
+            return None
+        
+        # Generate unique item ID
+        self.item_counter[task_class] += 1
+        item_id = f"item_{task_class}_{self.item_counter[task_class]}"
+        
+        pickup_x, pickup_y = PICKUP
+        
+        # Color mapping for visual distinction
+        colors = {
+            'A': [0.8, 0.2, 0.2, 1.0],  # Red
+            'B': [0.2, 0.8, 0.2, 1.0],  # Green
+            'C': [0.2, 0.2, 0.8, 1.0],  # Blue
+        }
+        
+        # Generate SDF for this item
+        item_sdf = self._generate_item_sdf(item_id, colors[task_class])
+        
+        # Spawn at pickup location (single item, centered)
+        item_z = 0.15  # Half of box height (0.3m box)
+        if self._spawn_item(item_id, item_sdf, pickup_x, pickup_y, item_z):
+            self.get_logger().info(f"Spawned {item_id} at pickup ({pickup_x:.2f}, {pickup_y:.2f})")
+            return item_id
+        return None
+
+    def _cleanup_item(self, item_id):
+        """Delete an item from Gazebo."""
+        if not self.delete_client or not self.delete_client.service_is_ready():
+            return False
+        
+        req = DeleteEntity.Request()
+        req.name = item_id
+        future = self.delete_client.call_async(req)
+        try:
+            rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+            if future.result() and future.result().success:
+                return True
+        except Exception as e:
+            self.get_logger().warn(f"Exception deleting {item_id}: {e}")
+        return False
+
     def sample_start_and_goal(self):
         """Sample start pose and goal based on curriculum stage."""
         if self.curriculum_stage == 1:
@@ -212,19 +340,31 @@ class Tb3Env(Node):
             return (sx, sy, yaw), (gx, gy)
 
         else:  # Stage 3
-            # Stage 3: Virtual sorting between DOCK_A/DOCK_B/DOCK_C
-            # Start sampled in workspace, randomly choose task class
+            # Stage 3: Two-phase virtual sorting (PICKUP → DOCK)
+            # Phase 1: Navigate to PICKUP (with items)
+            # Phase 2: Navigate to correct dock after pickup
             sx = random.uniform(X_MIN, X_MAX)
             sy = random.uniform(Y_MIN, Y_MAX)
             yaw = random.uniform(-math.pi, math.pi)
             # Randomly choose task class A, B, or C
             self.task_class = random.choice(['A', 'B', 'C'])
+            # Determine dock location based on task class
             if self.task_class == 'A':
-                gx, gy = DOCK_A
+                dock_x, dock_y = DOCK_A
             elif self.task_class == 'B':
-                gx, gy = DOCK_B
+                dock_x, dock_y = DOCK_B
             else:  # 'C'
-                gx, gy = DOCK_C
+                dock_x, dock_y = DOCK_C
+            
+            # Store both goals for two-phase training
+            self.pickup_goal = PICKUP
+            self.dropoff_goal = (dock_x, dock_y)
+            self.phase = "GO_PICKUP"
+            self.pickup_reached = False
+            self.pickup_reached_time = None
+            
+            # Initial goal is PICKUP (phase 1)
+            gx, gy = PICKUP
             return (sx, sy, yaw), (gx, gy)
 
     def _obs(self):
@@ -237,15 +377,21 @@ class Tb3Env(Node):
         tail = np.array([dx, dy, self.pose[2]], dtype=np.float32)
         
         # Task class one-hot encoding (3 dims)
-        # For Stage 3: [1,0,0] for A, [0,1,0] for B, [0,0,1] for C
-        # For Stage 1/2: use dummy [1,0,0]
+        # For Stage 3: phase-aware task class encoding
+        # During GO_PICKUP: use dummy [1,0,0] (no task class yet, just navigate to pickup)
+        # During GO_DROPOFF: use actual task class one-hot encoding
         if self.curriculum_stage == 3 and self.task_class:
-            if self.task_class == 'A':
+            if self.phase == "GO_DROPOFF":
+                # Phase 2: use actual task class encoding
+                if self.task_class == 'A':
+                    task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+                elif self.task_class == 'B':
+                    task_onehot = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+                else:  # 'C'
+                    task_onehot = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+            else:
+                # Phase 1 (GO_PICKUP): use dummy encoding
                 task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-            elif self.task_class == 'B':
-                task_onehot = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-            else:  # 'C'
-                task_onehot = np.array([0.0, 0.0, 1.0], dtype=np.float32)
         else:
             # Stage 1/2: dummy one-hot
             task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
@@ -271,6 +417,11 @@ class Tb3Env(Node):
                                   f"steps={self.episode_steps} dist={final_dist:.2f}m "
                                   f"success={success} return={self.cumulative_reward:.2f}")
 
+        # Clean up items from previous episode (Stage 3 only)
+        if self.curriculum_stage == 3 and self.current_item_id:
+            self._cleanup_item(self.current_item_id)
+            self.current_item_id = None
+        
         # Reset counters
         self.episode_idx += 1
         self.episode_steps = 0
@@ -278,10 +429,22 @@ class Tb3Env(Node):
         self.collision = False
         self.min_obstacle_dist = self.max_range
         self.recent_positions.clear()
+        
+        # Reset phase tracking for Stage 3
+        if self.curriculum_stage == 3:
+            self.pickup_reached = False
+            self.pickup_reached_time = None
 
         # Sample new start/goal using curriculum stage
         (sx, sy, syaw), (gx, gy) = self.sample_start_and_goal()
         self.goal[:] = (gx, gy)
+        
+        # For Stage 3: spawn item at pickup
+        if self.curriculum_stage == 3 and self.task_class:
+            # Wait a bit for services to be ready
+            if self.spawn_client:
+                self.spawn_client.wait_for_service(timeout_sec=2.0)
+            self.current_item_id = self._spawn_item_at_pickup(self.task_class)
 
         # Teleport robot
         if self.reset_cli.wait_for_service(timeout_sec=5.0):
@@ -328,6 +491,7 @@ class Tb3Env(Node):
         k_time = 0.005   # Reduced from 0.01 (less harsh)
         k_collision = 5.0
         k_success = 10.0
+        k_pickup_success = 5.0  # Reward for reaching pickup (smaller than final success)
         # SUCCESS_RADIUS and CLOSE_RADIUS are module-level constants (defined at top)
 
         # Progress reward
@@ -356,30 +520,60 @@ class Tb3Env(Node):
             r -= k_collision
             done = True
 
-        # Success bonus
-        if dist < SUCCESS_RADIUS and not self.collision:
-            # For Stage 3: check if reached correct dock
-            if self.curriculum_stage == 3 and self.task_class:
-                # Check which dock is closest
-                dist_to_a = math.hypot(self.pose[0] - DOCK_A[0], self.pose[1] - DOCK_A[1])
-                dist_to_b = math.hypot(self.pose[0] - DOCK_B[0], self.pose[1] - DOCK_B[1])
-                dist_to_c = math.hypot(self.pose[0] - DOCK_C[0], self.pose[1] - DOCK_C[1])
-                
-                # Find closest dock
-                closest_dock = min([('A', dist_to_a), ('B', dist_to_b), ('C', dist_to_c)], key=lambda x: x[1])
-                
-                if closest_dock[0] == self.task_class and closest_dock[1] < SUCCESS_RADIUS:
-                    # Correct dock
-                    r += k_success
-                    success = True
-                    done = True
-                elif closest_dock[1] < SUCCESS_RADIUS:
-                    # Wrong dock - small penalty
-                    r -= 2.0
-                    done = True
-            else:
-                # Stage 1/2: any success is good
-                r += k_success
+        # For Stage 3: Handle two-phase training (PICKUP → DOCK)
+        if self.curriculum_stage == 3 and self.task_class and not done:
+            if self.phase == "GO_PICKUP":
+                # Phase 1: Check if reached PICKUP
+                dist_to_pickup = math.hypot(self.pose[0] - PICKUP[0], self.pose[1] - PICKUP[1])
+                if dist_to_pickup < SUCCESS_RADIUS and not self.collision:
+                    # Check stability (been close for at least 1 second)
+                    now = time.time()
+                    if self.pickup_reached_time is None:
+                        self.pickup_reached_time = now
+                    elif now - self.pickup_reached_time >= 1.0:  # Stable for 1 second
+                        # Reached pickup: transition to phase 2
+                        r += k_pickup_success  # Reward for reaching pickup
+                        self.phase = "GO_DROPOFF"
+                        self.pickup_reached = True
+                        # Switch goal to dock
+                        self.goal[:] = self.dropoff_goal
+                        # Delete item (virtual pickup)
+                        if self.current_item_id:
+                            self._cleanup_item(self.current_item_id)
+                        # Reset distance tracking for new phase
+                        self.prev_dist = float(np.linalg.norm(self.goal - self.pose[:2]))
+                        self.in_close_zone = False
+                        self.pickup_reached_time = None
+                    # Don't set done=True - continue to phase 2
+                else:
+                    # Reset timer if not close anymore
+                    if dist_to_pickup >= SUCCESS_RADIUS:
+                        self.pickup_reached_time = None
+            
+            elif self.phase == "GO_DROPOFF":
+                # Phase 2: Check if reached correct dock
+                if dist < SUCCESS_RADIUS and not self.collision:
+                    # Check which dock is closest
+                    dist_to_a = math.hypot(self.pose[0] - DOCK_A[0], self.pose[1] - DOCK_A[1])
+                    dist_to_b = math.hypot(self.pose[0] - DOCK_B[0], self.pose[1] - DOCK_B[1])
+                    dist_to_c = math.hypot(self.pose[0] - DOCK_C[0], self.pose[1] - DOCK_C[1])
+                    
+                    # Find closest dock
+                    closest_dock = min([('A', dist_to_a), ('B', dist_to_b), ('C', dist_to_c)], key=lambda x: x[1])
+                    
+                    if closest_dock[0] == self.task_class and closest_dock[1] < SUCCESS_RADIUS:
+                        # Correct dock - full success!
+                        r += k_success
+                        success = True
+                        done = True
+                    elif closest_dock[1] < SUCCESS_RADIUS:
+                        # Wrong dock - penalty
+                        r -= 2.0
+                        done = True
+        
+        # For Stage 1/2: standard success check
+        elif dist < SUCCESS_RADIUS and not self.collision and not done:
+            r += k_success
             success = True
             done = True
 
@@ -434,11 +628,11 @@ def main():
     # Stage 2: Longer aisle navigation
     ros2 run rl_nav train_ppo --timesteps 80000 --curriculum-stage 2
     
-    # Stage 3: Virtual sorting between docks
-    ros2 run rl_nav train_ppo --timesteps 100000 --curriculum-stage 3
+    # Stage 3: Two-phase virtual sorting (PICKUP → DOCK) with items
+    ros2 run rl_nav train_ppo --timesteps 300000 --curriculum-stage 3
     
-    # With seed for reproducibility
-    ros2 run rl_nav train_ppo --timesteps 80000 --curriculum-stage 3 --seed 0
+    # With seed for reproducibility (recommended: 300k timesteps)
+    ros2 run rl_nav train_ppo --timesteps 300000 --curriculum-stage 3 --seed 0
     """
     import argparse
 
