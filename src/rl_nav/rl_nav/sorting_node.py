@@ -266,52 +266,33 @@ class SortingNode(Node):
             self.get_logger().warn(f"No items available for task class {task_class}")
             return False
         
-        self.get_logger().info(f"Spawning items for task {task_class} at pickup point")
+        # Only spawn the FIRST item for this task (the one that will be picked up)
+        item_id = self.items_at_pickup[task_class][0]  # Get first item
+        
+        # Skip if already spawned
+        if item_id in self.active_items and self.active_items[item_id]['spawned']:
+            return True
+        
+        self.get_logger().info(f"Spawning item for task {task_class} at pickup point")
         pickup_x, pickup_y = self.pickup_location
         
-        # Spawn items in a grid pattern at pickup point
-        spacing = 0.3  # 30cm spacing between items
-        items_per_row = 3
+        # Spawn single item at pickup point
+        item_x = pickup_x
+        item_y = pickup_y
+        item_z = 0.15  # Half of box height (0.3m box)
         
-        item_list = self.items_at_pickup[task_class]
-        spawned_count = 0
+        # Generate SDF for this item
         color_rgba = get_item_color(task_class)
+        item_sdf = generate_item_sdf(item_id, color_rgba)
         
-        for idx, item_id in enumerate(item_list):
-            # Only spawn items that haven't been spawned yet
-            if item_id in self.active_items and self.active_items[item_id]['spawned']:
-                continue  # Already spawned
-            
-            row = idx // items_per_row
-            col = idx % items_per_row
-            
-            # Calculate position offset from pickup center
-            offset_x = (col - items_per_row/2 + 0.5) * spacing
-            offset_y = row * spacing
-            
-            item_x = pickup_x + offset_x
-            item_y = pickup_y + offset_y
-            item_z = 0.15  # Half of box height (0.3m box)
-            
-            # Generate SDF for this item
-            item_sdf = generate_item_sdf(item_id, color_rgba)
-            
-            # Spawn item
-            if spawn_entity(self, self.spawn_client, item_id, item_sdf, item_x, item_y, item_z):
-                self.active_items[item_id]['spawned'] = True
-                spawned_count += 1
-                self.get_logger().info(f"Spawned {item_id} at pickup ({item_x:.2f}, {item_y:.2f})")
-            else:
-                self.get_logger().warn(f"Failed to spawn {item_id}")
-            
-            # Rate limiting: delay between spawns to prevent overwhelming Gazebo
-            if idx < len(item_list) - 1:
-                time.sleep(0.5)
-        
-        if spawned_count > 0:
-            self.get_logger().info(f"Spawned {spawned_count} items for task {task_class}")
+        # Spawn item
+        if spawn_entity(self, self.spawn_client, item_id, item_sdf, item_x, item_y, item_z):
+            self.active_items[item_id]['spawned'] = True
+            self.get_logger().info(f"Spawned {item_id} at pickup ({item_x:.2f}, {item_y:.2f})")
             return True
-        return False
+        else:
+            self.get_logger().warn(f"Failed to spawn {item_id}")
+            return False
 
     def _reset_robot_position(self):
         """Reset robot to a safe position when stuck."""
