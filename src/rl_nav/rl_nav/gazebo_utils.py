@@ -92,9 +92,31 @@ def spawn_entity(node: Node, spawn_client, name: str, sdf_xml: str,
     
     future = spawn_client.call_async(req)
     try:
-        rclpy.spin_until_future_complete(node, future, timeout_sec=3.0)
-        if future.result() and future.result().success:
+        # Increase timeout to 5.0 seconds (matching warehouse_spawner)
+        rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+        
+        if not future.done():
+            node.get_logger().warn(f"Spawn service call timed out for {name}")
+            return False
+        
+        result = future.result()
+        if result is None:
+            node.get_logger().warn(f"Spawn service returned None for {name}")
+            return False
+        
+        # Check success field if it exists, otherwise assume success if result exists
+        # (Gazebo sometimes returns result without explicit success field)
+        if hasattr(result, 'success'):
+            if result.success:
+                return True
+            else:
+                node.get_logger().warn(f"Spawn service returned success=False for {name}")
+                return False
+        else:
+            # No success field - assume success if we got a result
+            # This matches the pattern in warehouse_spawner.py
             return True
+            
     except Exception as e:
         node.get_logger().warn(f"Exception spawning {name}: {e}")
     return False
@@ -143,7 +165,8 @@ def reset_robot_position(node: Node, x: float = None, y: float = None, z: float 
         y = (Y_MIN + Y_MAX) / 2.0
     
     reset_cli = node.create_client(SetEntityState, "/set_entity_state")
-    if not reset_cli.wait_for_service(timeout_sec=1.0):
+    # Increase wait timeout to 5.0 seconds
+    if not reset_cli.wait_for_service(timeout_sec=5.0):
         node.get_logger().warn("Reset service not available - skipping reset")
         return False
     
@@ -157,7 +180,8 @@ def reset_robot_position(node: Node, x: float = None, y: float = None, z: float 
     
     future = reset_cli.call_async(req)
     try:
-        rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
+        # Increase timeout to 5.0 seconds
+        rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
     except Exception as e:
         node.get_logger().warn(f"Exception waiting for reset service: {e}")
         return False
@@ -168,7 +192,19 @@ def reset_robot_position(node: Node, x: float = None, y: float = None, z: float 
     
     try:
         result = future.result()
-        if result and result.success:
+        if result is None:
+            node.get_logger().warn("Reset service returned None")
+            return False
+        
+        if hasattr(result, 'success'):
+            if result.success:
+                node.get_logger().info("Robot position reset successfully")
+                return True
+            else:
+                node.get_logger().warn("Reset service returned success=False")
+                return False
+        else:
+            # No success field - assume success if we got a result
             node.get_logger().info("Robot position reset successfully")
             return True
     except Exception as e:
