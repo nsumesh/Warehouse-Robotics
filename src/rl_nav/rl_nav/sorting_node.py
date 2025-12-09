@@ -4,7 +4,8 @@ Sorting Node with Stage 3 PPO Navigation
 
 Manages virtual sorting tasks using trained Stage 3 PPO policy.
 Task classes: A, B, C (mapped to DOCK_A, DOCK_B, DOCK_C)
-FSM: IDLE → GO_PICKUP → GO_DROPOFF → GO_DOCKING → IDLE
+FSM: IDLE → GO_PICKUP → GO_DROPOFF → IDLE (repeat for each task)
+     After all tasks: GO_DROPOFF → GO_DOCKING → IDLE (final docking only)
 """
 import os
 import sys
@@ -117,6 +118,7 @@ class SortingNode(Node):
         self.item_counter = {'A': 0, 'B': 0, 'C': 0}  # Counter for unique IDs
         self.current_item_id = None  # Store current item ID for dropoff
         self._items_spawned_for_current_task = False  # Track if items spawned for current task
+        self.dropped_items = {}  # Maps item_id -> {'dropoff_time': timestamp, 'task_class': 'A'}
 
         # Docking state variables
         self.blue_marker_detected = False
@@ -334,6 +336,11 @@ class SortingNode(Node):
         # Spawn at dock location
         if spawn_entity(self, self.spawn_client, item_id, item_sdf, dock_x, dock_y, 0.15):
             self.get_logger().info(f"Dropped {task_class} item ({item_id}) at DOCK_{task_class} ({dock_x:.1f}, {dock_y:.1f})")
+            # Track dropped item for delayed deletion
+            self.dropped_items[item_id] = {
+                'dropoff_time': time.time(),
+                'task_class': task_class
+            }
             return True
         else:
             self.get_logger().warn(f"Failed to spawn at dock - simulating dropoff")
@@ -346,6 +353,21 @@ class SortingNode(Node):
     def _delete_blue_box(self):
         """Delete blue box marker after docking."""
         return delete_blue_box(self, self.delete_client, self.task_class)
+
+    def _cleanup_dropped_items(self):
+        """Delete items from dropoff points after 2-3 seconds."""
+        now = time.time()
+        items_to_delete = []
+        
+        for item_id, item_info in self.dropped_items.items():
+            elapsed = now - item_info['dropoff_time']
+            if elapsed >= 2.5:  # Delete after 2.5 seconds
+                items_to_delete.append(item_id)
+        
+        for item_id in items_to_delete:
+            if delete_entity(self, self.delete_client, item_id):
+                self.get_logger().debug(f"Cleaned up dropped item: {item_id}")
+            del self.dropped_items[item_id]
 
     def _reset_task_state(self):
         """Reset state after task completion."""
@@ -368,6 +390,9 @@ class SortingNode(Node):
     def task_manager(self):
         """Manage task queue and FSM transitions."""
         now = time.time()
+
+        # Cleanup dropped items periodically
+        self._cleanup_dropped_items()
 
         # Check for collision or stuck (only during active navigation)
         if self.phase in ["GO_PICKUP", "GO_DROPOFF", "GO_DOCKING"]:
@@ -457,61 +482,54 @@ class SortingNode(Node):
         elif self.phase == "GO_DROPOFF":
             dist_to_dock = self._distance_to_goal()
             
-            # Transition to docking when close enough (within 1.5m)
-            if dist_to_dock < self.docking_transition_distance:
-                self.phase = "GO_DOCKING"
-                self.docking_start_time = now
-                self.docking_complete = False
-                self.blue_marker_detected = False
-                self.blue_marker_area = 0
-                self.blue_marker_centered = False
-                self.blue_marker_error_x = 0
-                self.docking_stable_time = None
-                
-                # Spawn blue box at dock location
-                dock_x, dock_y = self.drop_docks[self.task_class]
-                if self._spawn_blue_box_at_dock(dock_x, dock_y):
-                    self.get_logger().info(f"[Task] {self.current_task}: Starting color-based docking at DOCK_{self.task_class}")
-                else:
-                    self.get_logger().warn("Failed to spawn blue box - completing task without docking")
-                    # Fallback: complete task without docking
-                    item_id = getattr(self, 'current_item_id', None)
-                    self._virtual_dropoff(self.task_class, item_id)
-                    self._reset_task_state()
+            # Check if we've reached the dock (close enough or goal reached)
+            reached_dock = (dist_to_dock < self.docking_transition_distance) or self._goal_reached()
             
-            # Fallback: if PPO gets very close using old method, also transition to docking
-            elif self._goal_reached():
-                self.phase = "GO_DOCKING"
-                self.docking_start_time = now
-                self.docking_complete = False
-                self.blue_marker_detected = False
-                self.blue_marker_area = 0
-                self.blue_marker_centered = False
-                self.blue_marker_error_x = 0
-                self.docking_stable_time = None
-                dock_x, dock_y = self.drop_docks[self.task_class]
-                if self._spawn_blue_box_at_dock(dock_x, dock_y):
-                    self.get_logger().info(f"[Task] {self.current_task}: Starting color-based docking at DOCK_{self.task_class}")
+            if reached_dock:
+                # Drop off the item first
+                item_id = getattr(self, 'current_item_id', None)
+                self._virtual_dropoff(self.task_class, item_id)
+                self.get_logger().info(f"[Task] ✓ Dropped off {self.current_task} item at DOCK_{self.task_class}")
+                
+                # Check if this is the last task - only dock when all tasks are complete
+                if not self.task_queue:
+                    # All tasks done - now perform final docking
+                    self.phase = "GO_DOCKING"
+                    self.docking_start_time = now
+                    self.docking_complete = False
+                    self.blue_marker_detected = False
+                    self.blue_marker_area = 0
+                    self.blue_marker_centered = False
+                    self.blue_marker_error_x = 0
+                    self.docking_stable_time = None
+                    
+                    # Spawn blue box at dock location for final docking
+                    dock_x, dock_y = self.drop_docks[self.task_class]
+                    if self._spawn_blue_box_at_dock(dock_x, dock_y):
+                        self.get_logger().info(f"[Final] All tasks complete! Starting final docking at DOCK_{self.task_class}")
+                    else:
+                        self.get_logger().warn("Failed to spawn blue box - completing without final docking")
+                        self._reset_task_state()
+                else:
+                    # More tasks remaining - skip docking and move to next task
+                    self.get_logger().info(f"[Task] {self.current_task} complete. {len(self.task_queue)} task(s) remaining.")
+                    self._reset_task_state()
 
         elif self.phase == "GO_DOCKING":
             # Check docking completion
             if self.docking_complete:
-                # Docking successful!
-                item_id = getattr(self, 'current_item_id', None)
-                self._virtual_dropoff(self.task_class, item_id)
-                self.get_logger().info(f"[Task] ✓ Completed docking and sorting {self.current_task} item")
+                # Final docking successful!
+                self.get_logger().info(f"[Final] ✓ Completed final docking at DOCK_{self.task_class}")
                 
                 # Clean up blue box
                 self._delete_blue_box()
                 
-                # Reset for next task
+                # Reset for next task (will be IDLE since queue is empty)
                 self._reset_task_state()
                 
             elif self.docking_start_time and (now - self.docking_start_time) > self.max_docking_time:
-                # Timeout - docking took too long
-                self.get_logger().warn("Docking timeout - completing task anyway")
-                item_id = getattr(self, 'current_item_id', None)
-                self._virtual_dropoff(self.task_class, item_id)
+                # Timeout - final docking took too long
+                self.get_logger().warn("Final docking timeout - completing anyway")
                 self._delete_blue_box()
                 self._reset_task_state()
 
@@ -532,9 +550,7 @@ class SortingNode(Node):
             self.current_goal = None
             self.task_start_time = None
         elif self.phase == "GO_DOCKING":
-            # Docking timeout: complete task and reset
-            item_id = getattr(self, 'current_item_id', None)
-            self._virtual_dropoff(self.task_class, item_id)
+            # Final docking timeout: item already dropped, just clean up and reset
             self._delete_blue_box()
             self._reset_task_state()
 
