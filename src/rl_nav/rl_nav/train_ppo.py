@@ -36,72 +36,20 @@ from gymnasium import spaces
 from stable_baselines3 import PPO
 import torch
 
-# Workspace limits - limited aisle workspace
-X_MIN, X_MAX = -7.0, 2.0
-Y_MIN, Y_MAX = -3.0, 3.0
-
-# Docking bays - virtual sorting categories
-# Each dock represents a different sorting category
-DOCK_A = (-6.5, -2.0)  # Sorting category A
-DOCK_B = (-6.5, 0.0)   # Sorting category B
-DOCK_C = (-6.5, 2.0)   # Sorting category C
-
-# Optional pickup zone (for future use)
-PICKUP = (-4.0, 0.0)
-
-# Success and close zone radii (consistent across all methods)
-SUCCESS_RADIUS = 0.7  # Distance threshold for successful docking (increased for easier docking)
-CLOSE_RADIUS = 1.5   # Distance threshold for intermediate close bonus
-
-
-def angle_diff(a: float, b: float) -> float:
-    """Smallest signed difference between two angles in [-pi, pi]."""
-    d = a - b
-    while d > math.pi:
-        d -= 2.0 * math.pi
-    while d < -math.pi:
-        d += 2.0 * math.pi
-    return d
-
-
-def spawn_tb3(node: Node) -> bool:
-    """Spawn TurtleBot3 in Gazebo."""
-    model_path = os.path.expanduser(
-        "~/turtlebot3_ws/install/turtlebot3_gazebo/share/"
-        "turtlebot3_gazebo/models/turtlebot3_waffle_pi/model.sdf"
-    )
-    if not os.path.exists(model_path):
-        node.get_logger().error(f"TB3 model not found: {model_path}")
-        return False
-
-    with open(model_path, "r") as f:
-        sdf_xml = f.read()
-
-    spawn_cli = node.create_client(SpawnEntity, "/spawn_entity")
-    if not spawn_cli.wait_for_service(timeout_sec=10.0):
-        node.get_logger().error("Service /spawn_entity not available")
-        return False
-
-    req = SpawnEntity.Request()
-    req.name = "tb3"
-    req.xml = sdf_xml
-    req.robot_namespace = ""
-    req.reference_frame = "world"
-    # Spawn in workspace center
-    req.initial_pose.position.x = (X_MIN + X_MAX) / 2.0
-    req.initial_pose.position.y = (Y_MIN + Y_MAX) / 2.0
-    req.initial_pose.position.z = 0.01
-    yaw = 0.0
-    req.initial_pose.orientation.z = math.sin(yaw / 2.0)
-    req.initial_pose.orientation.w = math.cos(yaw / 2.0)
-
-    future = spawn_cli.call_async(req)
-    rclpy.spin_until_future_complete(node, future)
-    if future.result() is None:
-        node.get_logger().error("Failed to spawn TB3")
-        return False
-    node.get_logger().info("TB3 spawned successfully")
-    return True
+# Import constants and utilities
+from rl_nav.constants import (
+    X_MIN, X_MAX, Y_MIN, Y_MAX, DOCK_A, DOCK_B, DOCK_C, PICKUP,
+    SUCCESS_RADIUS, CLOSE_RADIUS, ACTIONS, MAX_RANGE, NUM_SCAN_BINS
+)
+from rl_nav.gazebo_utils import spawn_tb3, spawn_entity, delete_entity
+from rl_nav.item_utils import generate_item_sdf, get_item_color
+from rl_nav.navigation_utils import process_scan_to_bins
+from rl_nav.observation_utils import build_observation, encode_task_class_onehot
+from rl_nav.reward_utils import (
+    K_PROGRESS, K_TIME, K_COLLISION, K_SUCCESS, K_PICKUP_SUCCESS,
+    K_CLOSE_ZONE, K_WRONG_DOCK, calculate_progress_reward,
+    check_close_zone_bonus, check_dock_success
+)
 
 
 class Tb3Env(Node):
@@ -114,8 +62,8 @@ class Tb3Env(Node):
         self.odom_sub = self.create_subscription(Odometry, "/odom", self._on_odom, 10)
         self.reset_cli = self.create_client(SetEntityState, "/set_entity_state")
 
-        self.max_range = 3.5
-        self.num_scan_bins = 24
+        self.max_range = MAX_RANGE
+        self.num_scan_bins = NUM_SCAN_BINS
         self.scan = None
         self.pose = np.zeros(3, dtype=np.float32)
         self.goal = np.array([0.0, 6.0], dtype=np.float32)
@@ -137,9 +85,7 @@ class Tb3Env(Node):
 
         self.in_close_zone = False  # Track if in close zone for one-time bonus
 
-        self.actions = [
-            (0.12, 0.6), (0.15, 0.0), (0.12, -0.6), (0.00, 0.6), (0.00, -0.6)
-        ]
+        self.actions = ACTIONS
         self.recent_positions = deque(maxlen=10)
         self.curriculum_stage = curriculum_stage
         self.task_class = None  # For Stage 3: 'A', 'B', or 'C'
@@ -163,36 +109,9 @@ class Tb3Env(Node):
 
     def _on_scan(self, msg: LaserScan):
         """Process LiDAR scan into bins."""
-        ranges = msg.ranges
-        n = len(ranges)
-        if n == 0:
-            self.scan = np.ones(self.num_scan_bins, dtype=np.float32)
-            self.collision = False
-            return
-
-        step = max(1, n // self.num_scan_bins)
-        bins = []
-        min_dist = self.max_range
-        collision = False
-
-        for i in range(0, n, step):
-            v = ranges[i]
-            if math.isnan(v) or v <= 0.0:
-                v = self.max_range
-            if v < min_dist:
-                min_dist = v
-            if v < 0.18:
-                collision = True
-            bins.append(min(v, self.max_range) / self.max_range)
-            if len(bins) == self.num_scan_bins:
-                break
-
-        if len(bins) < self.num_scan_bins:
-            bins.extend([1.0] * (self.num_scan_bins - len(bins)))
-
-        self.scan = np.array(bins, dtype=np.float32)
-        self.collision = collision
-        self.min_obstacle_dist = float(min_dist)
+        self.scan, self.collision, self.min_obstacle_dist = process_scan_to_bins(
+            msg, self.num_scan_bins, self.max_range
+        )
 
     def _on_odom(self, msg: Odometry):
         """Update robot pose [x, y, yaw]."""
@@ -202,72 +121,6 @@ class Tb3Env(Node):
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         self.pose[:] = (x, y, yaw)
 
-    def _generate_item_sdf(self, item_name, color_rgba):
-        """Generate SDF for a sortable item box."""
-        size = [0.2, 0.2, 0.3]  # 20cm x 20cm x 30cm box
-        mass = 0.5
-        
-        # Calculate inertia (for box: I = m/12 * (h^2 + d^2))
-        ixx = (mass / 12.0) * (size[1]**2 + size[2]**2)
-        iyy = (mass / 12.0) * (size[0]**2 + size[2]**2)
-        izz = (mass / 12.0) * (size[0]**2 + size[1]**2)
-        
-        sdf = f"""<?xml version="1.0"?>
-<sdf version="1.6">
-  <model name="{item_name}">
-    <static>false</static>
-    <pose>0 0 0 0 0 0</pose>
-    <link name="link">
-      <inertial>
-        <mass>{mass}</mass>
-        <inertia>
-          <ixx>{ixx}</ixx>
-          <iyy>{iyy}</iyy>
-          <izz>{izz}</izz>
-          <ixy>0</ixy>
-          <ixz>0</ixz>
-          <iyz>0</iyz>
-        </inertia>
-      </inertial>
-      <collision name="collision">
-        <geometry><box><size>{size[0]} {size[1]} {size[2]}</size></box></geometry>
-      </collision>
-      <visual name="visual">
-        <geometry><box><size>{size[0]} {size[1]} {size[2]}</size></box></geometry>
-        <material>
-          <ambient>{color_rgba[0]} {color_rgba[1]} {color_rgba[2]} {color_rgba[3]}</ambient>
-          <diffuse>{color_rgba[0]} {color_rgba[1]} {color_rgba[2]} {color_rgba[3]}</diffuse>
-        </material>
-      </visual>
-    </link>
-  </model>
-</sdf>"""
-        return sdf
-
-    def _spawn_item(self, item_name, item_sdf, x, y, z):
-        """Spawn a single item in Gazebo."""
-        if not self.spawn_client or not self.spawn_client.service_is_ready():
-            return False
-        
-        req = SpawnEntity.Request()
-        req.name = item_name
-        req.xml = item_sdf
-        req.robot_namespace = ""
-        req.reference_frame = "world"
-        
-        # Set pose - required for items to spawn at correct location
-        req.initial_pose = Pose()
-        req.initial_pose.position = Point(x=float(x), y=float(y), z=float(z))
-        req.initial_pose.orientation = Quaternion(w=1.0)  # No rotation
-        
-        future = self.spawn_client.call_async(req)
-        try:
-            rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)
-            if future.result() and future.result().success:
-                return True
-        except Exception as e:
-            self.get_logger().warn(f"Exception spawning {item_name}: {e}")
-        return False
 
     def _spawn_item_at_pickup(self, task_class):
         """Spawn a single item at pickup point for the given task class."""
@@ -280,38 +133,20 @@ class Tb3Env(Node):
         
         pickup_x, pickup_y = PICKUP
         
-        # Color mapping for visual distinction
-        colors = {
-            'A': [0.8, 0.2, 0.2, 1.0],  # Red
-            'B': [0.2, 0.8, 0.2, 1.0],  # Green
-            'C': [0.2, 0.2, 0.8, 1.0],  # Blue
-        }
-        
         # Generate SDF for this item
-        item_sdf = self._generate_item_sdf(item_id, colors[task_class])
+        color_rgba = get_item_color(task_class)
+        item_sdf = generate_item_sdf(item_id, color_rgba)
         
         # Spawn at pickup location (single item, centered)
         item_z = 0.15  # Half of box height (0.3m box)
-        if self._spawn_item(item_id, item_sdf, pickup_x, pickup_y, item_z):
+        if spawn_entity(self, self.spawn_client, item_id, item_sdf, pickup_x, pickup_y, item_z):
             self.get_logger().info(f"Spawned {item_id} at pickup ({pickup_x:.2f}, {pickup_y:.2f})")
             return item_id
         return None
 
     def _cleanup_item(self, item_id):
         """Delete an item from Gazebo."""
-        if not self.delete_client or not self.delete_client.service_is_ready():
-            return False
-        
-        req = DeleteEntity.Request()
-        req.name = item_id
-        future = self.delete_client.call_async(req)
-        try:
-            rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-            if future.result() and future.result().success:
-                return True
-        except Exception as e:
-            self.get_logger().warn(f"Exception deleting {item_id}: {e}")
-        return False
+        return delete_entity(self, self.delete_client, item_id)
 
     def sample_start_and_goal(self):
         """Sample start pose and goal based on curriculum stage."""
@@ -373,30 +208,10 @@ class Tb3Env(Node):
             scan = np.ones(self.num_scan_bins, dtype=np.float32)
         else:
             scan = self.scan
-        dx, dy = (self.goal - self.pose[:2])
-        tail = np.array([dx, dy, self.pose[2]], dtype=np.float32)
         
-        # Task class one-hot encoding (3 dims)
-        # For Stage 3: phase-aware task class encoding
-        # During GO_PICKUP: use dummy [1,0,0] (no task class yet, just navigate to pickup)
-        # During GO_DROPOFF: use actual task class one-hot encoding
-        if self.curriculum_stage == 3 and self.task_class:
-            if self.phase == "GO_DROPOFF":
-                # Phase 2: use actual task class encoding
-                if self.task_class == 'A':
-                    task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-                elif self.task_class == 'B':
-                    task_onehot = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-                else:  # 'C'
-                    task_onehot = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-            else:
-                # Phase 1 (GO_PICKUP): use dummy encoding
-                task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        else:
-            # Stage 1/2: dummy one-hot
-            task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        
-        return np.concatenate([scan, tail, task_onehot], axis=0)
+        # Use observation utility for consistent encoding
+        task_class_for_obs = self.task_class if (self.curriculum_stage == 3 and self.phase == "GO_DROPOFF") else None
+        return build_observation(scan, self.pose, self.goal, task_class_for_obs, self.phase)
 
     def reset(self):
         """Reset environment for new episode."""
@@ -486,38 +301,21 @@ class Tb3Env(Node):
         dx, dy = (self.goal - self.pose[:2])
         dist = float(math.hypot(dx, dy))
 
-        # Reward constants - tuned for Stage 3 two-phase training
-        k_progress = 3.0  # Increased from 2.0 (encourages faster progress)
-        k_time = 0.003    # Reduced from 0.005 (less time pressure)
-        k_collision = 5.0
-        k_success = 15.0  # Increased from 10.0 (stronger success signal)
-        k_pickup_success = 7.0  # Increased from 5.0 (stronger pickup incentive)
-        # SUCCESS_RADIUS and CLOSE_RADIUS are module-level constants (defined at top)
-
         # Progress reward
-        if self.prev_dist is None:
-            delta = 0.0
-        else:
-            delta = self.prev_dist - dist
+        r = calculate_progress_reward(self.prev_dist, dist, K_PROGRESS)
         self.prev_dist = dist
-
-        r = k_progress * delta
-        r -= k_time  # Time penalty every step
+        r -= K_TIME  # Time penalty every step
 
         # Intermediate bonus for getting close to goal (one-time when entering)
-        if dist < CLOSE_RADIUS and dist >= SUCCESS_RADIUS:
-            if not self.in_close_zone:
-                r += 1.0  # One-time bonus for entering close zone
-                self.in_close_zone = True
-        elif dist >= CLOSE_RADIUS:
-            self.in_close_zone = False  # Reset when leaving close zone
+        bonus, self.in_close_zone = check_close_zone_bonus(dist, self.in_close_zone, K_CLOSE_ZONE)
+        r += bonus
 
         done = False
         success = False
 
         # Collision penalty
         if self.collision:
-            r -= k_collision
+            r -= K_COLLISION
             done = True
 
         # For Stage 3: Handle two-phase training (PICKUP → DOCK)
@@ -532,7 +330,7 @@ class Tb3Env(Node):
                         self.pickup_reached_time = now
                     elif now - self.pickup_reached_time >= 1.0:  # Stable for 1 second
                         # Reached pickup: transition to phase 2
-                        r += k_pickup_success  # Reward for reaching pickup
+                        r += K_PICKUP_SUCCESS  # Reward for reaching pickup
                         self.phase = "GO_DROPOFF"
                         self.pickup_reached = True
                         # Switch goal to dock
@@ -553,27 +351,20 @@ class Tb3Env(Node):
             elif self.phase == "GO_DROPOFF":
                 # Phase 2: Check if reached correct dock
                 if dist < SUCCESS_RADIUS and not self.collision:
-                    # Check which dock is closest
-                    dist_to_a = math.hypot(self.pose[0] - DOCK_A[0], self.pose[1] - DOCK_A[1])
-                    dist_to_b = math.hypot(self.pose[0] - DOCK_B[0], self.pose[1] - DOCK_B[1])
-                    dist_to_c = math.hypot(self.pose[0] - DOCK_C[0], self.pose[1] - DOCK_C[1])
-                    
-                    # Find closest dock
-                    closest_dock = min([('A', dist_to_a), ('B', dist_to_b), ('C', dist_to_c)], key=lambda x: x[1])
-                    
-                    if closest_dock[0] == self.task_class and closest_dock[1] < SUCCESS_RADIUS:
+                    dock_success, wrong_dock, _ = check_dock_success(self.pose, self.task_class, SUCCESS_RADIUS)
+                    if dock_success:
                         # Correct dock - full success!
-                        r += k_success
+                        r += K_SUCCESS
                         success = True
                         done = True
-                    elif closest_dock[1] < SUCCESS_RADIUS:
-                        # Wrong dock - penalty (increased to discourage wrong docks)
-                        r -= 5.0
+                    elif wrong_dock:
+                        # Wrong dock - penalty
+                        r -= K_WRONG_DOCK
                         done = True
         
         # For Stage 1/2: standard success check
         elif dist < SUCCESS_RADIUS and not self.collision and not done:
-            r += k_success
+            r += K_SUCCESS
             success = True
             done = True
 

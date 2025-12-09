@@ -4,7 +4,7 @@ Sorting Node with Stage 3 PPO Navigation
 
 Manages virtual sorting tasks using trained Stage 3 PPO policy.
 Task classes: A, B, C (mapped to DOCK_A, DOCK_B, DOCK_C)
-FSM: IDLE → GO_PICKUP → GO_DROPOFF → IDLE
+FSM: IDLE → GO_PICKUP → GO_DROPOFF → GO_DOCKING → IDLE
 """
 import os
 import sys
@@ -16,13 +16,30 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Image
 from nav_msgs.msg import Odometry
+from cv_bridge import CvBridge
+import cv2
 from gazebo_msgs.srv import SpawnEntity, DeleteEntity
 from stable_baselines3 import PPO
 
-# Import constants and spawn function from train_ppo.py
-from rl_nav.train_ppo import DOCK_A, DOCK_B, DOCK_C, PICKUP, SUCCESS_RADIUS, spawn_tb3, X_MIN, X_MAX, Y_MIN, Y_MAX
+# Import constants and utilities
+from rl_nav.constants import (
+    DOCK_A, DOCK_B, DOCK_C, PICKUP, SUCCESS_RADIUS, X_MIN, X_MAX, Y_MIN, Y_MAX,
+    ACTIONS, DOCKING_TRANSITION_DISTANCE
+)
+from rl_nav.gazebo_utils import (
+    spawn_tb3, spawn_entity, delete_entity, reset_robot_position,
+    spawn_blue_box_at_dock, delete_blue_box
+)
+from rl_nav.item_utils import generate_item_sdf, get_item_color
+from rl_nav.navigation_utils import (
+    distance_to_goal, goal_reached, check_collision, check_stuck, process_scan_to_bins
+)
+from rl_nav.docking_utils import (
+    process_camera_image, is_docking_complete, calculate_docking_control
+)
+from rl_nav.observation_utils import build_observation
 
 
 class SortingNode(Node):
@@ -55,6 +72,8 @@ class SortingNode(Node):
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
         self.scan_sub = self.create_subscription(LaserScan, "/scan", self._scan_cb, 10)
         self.odom_sub = self.create_subscription(Odometry, "/odom", self._odom_cb, 10)
+        self.camera_sub = self.create_subscription(Image, '/camera/image_raw', self._camera_cb, 10)
+        self.bridge = CvBridge()
         
         # Gazebo services for virtual pickup/dropoff
         self.delete_client = self.create_client(DeleteEntity, "/delete_entity")
@@ -71,7 +90,7 @@ class SortingNode(Node):
             'B': DOCK_B,
             'C': DOCK_C,
         }
-        self.actions = [(0.12, 0.6), (0.15, 0.0), (0.12, -0.6), (0.00, 0.6), (0.00, -0.6)]
+        self.actions = ACTIONS
 
         # State
         self.scan = None
@@ -82,7 +101,7 @@ class SortingNode(Node):
         self._goal_reached_time = None  # Track when goal was first reached (for stability check)
         self.task_queue = []
         self.current_task = None
-        self.phase = "IDLE"  # IDLE → GO_PICKUP → GO_DROPOFF → IDLE
+        self.phase = "IDLE"  # IDLE → GO_PICKUP → GO_DROPOFF → GO_DOCKING → IDLE
         self.task_start_time = None
         self.max_task_time = 180.0  # Increased timeout for better navigation
         self._last_log_time = None  # For debug logging
@@ -98,6 +117,18 @@ class SortingNode(Node):
         self.current_item_id = None  # Store current item ID for dropoff
         self._items_spawned_for_current_task = False  # Track if items spawned for current task
 
+        # Docking state variables
+        self.blue_marker_detected = False
+        self.blue_marker_area = 0
+        self.blue_marker_centered = False
+        self.blue_marker_error_x = 0  # For control calculation
+        self.docking_complete = False
+        self.docking_stable_time = None
+        self.docking_stable_duration = 3.0
+        self.max_docking_time = 30.0
+        self.docking_start_time = None
+        self.docking_transition_distance = DOCKING_TRANSITION_DISTANCE
+
         # Initialize
         self._build_initial_tasks(5)
         # Don't spawn items immediately - wait until robot is close to pickup
@@ -107,20 +138,7 @@ class SortingNode(Node):
 
     def _scan_cb(self, msg):
         """Process LiDAR scan into 24 bins (match training)."""
-        rng = np.array(msg.ranges, dtype=np.float32)
-        n, bins = len(rng), 24
-        step = max(1, n // bins)
-        scan_bins = []
-        for i in range(0, n, step):
-            v = rng[i]
-            if math.isnan(v) or v <= 0:
-                v = 3.5
-            scan_bins.append(min(v, 3.5) / 3.5)
-            if len(scan_bins) == bins:
-                break
-        while len(scan_bins) < bins:
-            scan_bins.append(1.0)
-        self.scan = np.array(scan_bins, dtype=np.float32)
+        self.scan, _, _ = process_scan_to_bins(msg, 24, 3.5)
 
     def _odom_cb(self, msg):
         """Update robot pose."""
@@ -130,35 +148,57 @@ class SortingNode(Node):
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         self.pose[:] = (x, y, yaw)
 
+    def _camera_cb(self, msg):
+        """Process camera image for blue marker detection during GO_DOCKING."""
+        # Safety: Reset docking state if not in GO_DOCKING phase
+        if self.phase != "GO_DOCKING":
+            # Clear any stale docking state to prevent issues
+            if self.blue_marker_detected or self.docking_complete:
+                self.blue_marker_detected = False
+                self.blue_marker_area = 0
+                self.blue_marker_centered = False
+                self.blue_marker_error_x = 0
+                self.docking_complete = False
+                self.docking_stable_time = None
+            return
+        
+        result = process_camera_image(self.bridge, msg, self.phase)
+        if result is None or 'error' in result:
+            if result and 'error' in result:
+                self.get_logger().warn(f"Camera processing error: {result['error']}")
+            # Reset state on error to prevent stale data
+            self.blue_marker_detected = False
+            self.blue_marker_area = 0
+            self.blue_marker_centered = False
+            self.blue_marker_error_x = 0
+            self.docking_stable_time = None
+            return
+        
+        # Update state from detection result
+        self.blue_marker_detected = result['detected']
+        self.blue_marker_area = result['area']
+        self.blue_marker_error_x = result['error_x']
+        self.blue_marker_centered = result['centered']
+        
+        # Check docking completion
+        if self.blue_marker_detected:
+            complete, new_stable_time = is_docking_complete(
+                self.blue_marker_area, self.blue_marker_centered,
+                self.docking_stable_time, self.docking_stable_duration
+            )
+            self.docking_complete = complete
+            self.docking_stable_time = new_stable_time
+            if complete:
+                self.get_logger().info("Docking complete: marker large, centered, and stable")
+        else:
+            # No marker detected - reset stability timer and completion flag
+            self.docking_stable_time = None
+            self.docking_complete = False
+
     def _obs(self):
         """Build 30-dim observation: 24 scan + [dx, dy, yaw] + task_class one-hot."""
-        if self.scan is None or self.current_goal is None:
-            return None
-        
-        # LiDAR bins (24 dims)
-        scan = self.scan
-        
-        # Goal relative pose (3 dims)
-        dx, dy = (np.array(self.current_goal) - self.pose[:2])
-        tail = np.array([dx, dy, self.pose[2]], dtype=np.float32)
-        
-        # Task class one-hot (3 dims)
-        # During GO_PICKUP: use dummy [1,0,0] (model should still work for basic navigation)
-        # During GO_DROPOFF: use actual task class for Stage 3 model
-        if self.phase == "GO_DROPOFF" and self.task_class:
-            if self.task_class == 'A':
-                task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-            elif self.task_class == 'B':
-                task_onehot = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-            elif self.task_class == 'C':
-                task_onehot = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-            else:
-                task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        else:
-            # GO_PICKUP or no task class: use dummy encoding
-            task_onehot = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        
-        return np.concatenate([scan, tail, task_onehot], axis=0)
+        task_class_for_obs = self.task_class if self.phase == "GO_DROPOFF" else None
+        return build_observation(self.scan, self.pose, self.current_goal, task_class_for_obs, self.phase)
 
     def _build_initial_tasks(self, num_tasks=5):
         """Build task queue and assign item IDs."""
@@ -182,135 +222,33 @@ class SortingNode(Node):
 
     def _distance_to_goal(self):
         """Calculate distance to goal."""
-        if self.current_goal is None:
-            return float('inf')
-        dx, dy = (np.array(self.current_goal) - self.pose[:2])
-        return float(math.hypot(dx, dy))
+        return distance_to_goal(self.pose, self.current_goal)
 
     def _goal_reached(self):
         """Check if goal reached (with stability check)."""
-        dist = self._distance_to_goal()
-        if dist < self.goal_reached_threshold:
-            # Goal is close - check if it's been close for at least 2 seconds
-            now = time.time()
-            if self._goal_reached_time is None:
-                self._goal_reached_time = now
-            elif now - self._goal_reached_time >= 3.0:  # Stable for 3 seconds
-                return True
-        else:
-            # Reset timer if we're not close anymore
-            self._goal_reached_time = None
-        return False
+        is_reached, new_time = goal_reached(
+            self.pose, self.current_goal, self.goal_reached_threshold,
+            self._goal_reached_time, 3.0
+        )
+        self._goal_reached_time = new_time
+        return is_reached
 
     def _check_collision(self):
         """Check if robot is too close to obstacles."""
-        if self.scan is None:
-            return False
-        
-        # Ensure scan is valid (not all NaN or invalid)
-        valid_scan = self.scan[~np.isnan(self.scan)]
-        if len(valid_scan) == 0:
-            return False
-        
-        # Check if any LiDAR reading is very close (collision threshold)
-        min_dist = np.min(valid_scan) * 3.5  # Convert normalized to meters
-        return min_dist < 0.15  # Reduced from 0.2 to 0.15m (15cm threshold)
+        return check_collision(self.scan, 3.5, 0.15)
 
     def _check_stuck(self):
         """Check if robot is stuck (distance not improving)."""
-        # Don't check for stuck if very close to goal (robot might be fine-tuning position)
         current_dist = self._distance_to_goal()
-        if current_dist < 1.0:
-            return False
-        
-        if self._last_stuck_check is None:
-            self._last_stuck_check = time.time()
-            self._last_stuck_dist = current_dist
-            return False
-        
-        # Check every 15 seconds (more lenient)
-        if time.time() - self._last_stuck_check > 15.0:
-            # If robot is close to goal (< 1.5m), be more lenient with stuck detection
-            if current_dist < 1.5:
-                # When close, require less improvement (0.1m instead of 0.2m)
-                improvement_threshold = 0.1
-            else:
-                # When far, require more improvement
-                improvement_threshold = 0.2
-            
-            # If distance hasn't improved by threshold in 15 seconds, consider stuck
-            if abs(current_dist - self._last_stuck_dist) < improvement_threshold:
-                self.get_logger().warn(f"Robot appears stuck: dist={current_dist:.2f}m (no improvement)")
-                return True
-            self._last_stuck_check = time.time()
-            self._last_stuck_dist = current_dist
-        return False
+        is_stuck, new_check_time, new_dist = check_stuck(
+            current_dist, self._last_stuck_check, self._last_stuck_dist
+        )
+        self._last_stuck_check = new_check_time
+        self._last_stuck_dist = new_dist
+        if is_stuck:
+            self.get_logger().warn(f"Robot appears stuck: dist={current_dist:.2f}m (no improvement)")
+        return is_stuck
 
-    def _generate_item_sdf(self, item_name, color_rgba):
-        """Generate SDF for a sortable item box."""
-        size = [0.2, 0.2, 0.3]  # 20cm x 20cm x 30cm box
-        mass = 0.5
-        
-        # Calculate inertia (for box: I = m/12 * (h^2 + d^2))
-        ixx = (mass / 12.0) * (size[1]**2 + size[2]**2)
-        iyy = (mass / 12.0) * (size[0]**2 + size[2]**2)
-        izz = (mass / 12.0) * (size[0]**2 + size[1]**2)
-        
-        sdf = f"""<?xml version="1.0"?>
-<sdf version="1.6">
-  <model name="{item_name}">
-    <static>false</static>
-    <pose>0 0 0 0 0 0</pose>
-    <link name="link">
-      <inertial>
-        <mass>{mass}</mass>
-        <inertia>
-          <ixx>{ixx}</ixx>
-          <iyy>{iyy}</iyy>
-          <izz>{izz}</izz>
-          <ixy>0</ixy>
-          <ixz>0</ixz>
-          <iyz>0</iyz>
-        </inertia>
-      </inertial>
-      <collision name="collision">
-        <geometry><box><size>{size[0]} {size[1]} {size[2]}</size></box></geometry>
-      </collision>
-      <visual name="visual">
-        <geometry><box><size>{size[0]} {size[1]} {size[2]}</size></box></geometry>
-        <material>
-          <ambient>{color_rgba[0]} {color_rgba[1]} {color_rgba[2]} {color_rgba[3]}</ambient>
-          <diffuse>{color_rgba[0]} {color_rgba[1]} {color_rgba[2]} {color_rgba[3]}</diffuse>
-        </material>
-      </visual>
-    </link>
-  </model>
-</sdf>"""
-        return sdf
-
-    def _spawn_item(self, item_name, item_sdf, x, y, z):
-        """Spawn a single item in Gazebo."""
-        from geometry_msgs.msg import Pose, Point, Quaternion
-        
-        req = SpawnEntity.Request()
-        req.name = item_name
-        req.xml = item_sdf
-        req.robot_namespace = ""
-        req.reference_frame = "world"
-        
-        # Set pose - required for items to spawn at correct location
-        req.initial_pose = Pose()
-        req.initial_pose.position = Point(x=float(x), y=float(y), z=float(z))
-        req.initial_pose.orientation = Quaternion(w=1.0)  # No rotation
-        
-        future = self.spawn_client.call_async(req)
-        try:
-            rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)
-            if future.result() and future.result().success:
-                return True
-        except Exception as e:
-            self.get_logger().warn(f"Exception spawning {item_name}: {e}")
-        return False
 
     def _spawn_items_for_current_task(self):
         """Spawn items for the current task class at pickup point when robot is close."""
@@ -330,19 +268,13 @@ class SortingNode(Node):
         self.get_logger().info(f"Spawning items for task {task_class} at pickup point")
         pickup_x, pickup_y = self.pickup_location
         
-        # Color mapping for visual distinction
-        colors = {
-            'A': [0.8, 0.2, 0.2, 1.0],  # Red
-            'B': [0.2, 0.8, 0.2, 1.0],  # Green
-            'C': [0.2, 0.2, 0.8, 1.0],  # Blue
-        }
-        
         # Spawn items in a grid pattern at pickup point
         spacing = 0.3  # 30cm spacing between items
         items_per_row = 3
         
         item_list = self.items_at_pickup[task_class]
         spawned_count = 0
+        color_rgba = get_item_color(task_class)
         
         for idx, item_id in enumerate(item_list):
             # Only spawn items that haven't been spawned yet
@@ -361,10 +293,10 @@ class SortingNode(Node):
             item_z = 0.15  # Half of box height (0.3m box)
             
             # Generate SDF for this item
-            item_sdf = self._generate_item_sdf(item_id, colors[task_class])
+            item_sdf = generate_item_sdf(item_id, color_rgba)
             
             # Spawn item
-            if self._spawn_item(item_id, item_sdf, item_x, item_y, item_z):
+            if spawn_entity(self, self.spawn_client, item_id, item_sdf, item_x, item_y, item_z):
                 self.active_items[item_id]['spawned'] = True
                 spawned_count += 1
                 self.get_logger().info(f"Spawned {item_id} at pickup ({item_x:.2f}, {item_y:.2f})")
@@ -378,56 +310,12 @@ class SortingNode(Node):
 
     def _reset_robot_position(self):
         """Reset robot to a safe position when stuck."""
-        from gazebo_msgs.srv import SetEntityState
-        from gazebo_msgs.msg import EntityState
-        
-        reset_cli = self.create_client(SetEntityState, "/set_entity_state")
-        if not reset_cli.wait_for_service(timeout_sec=1.0):  # Quick check
-            self.get_logger().warn("Reset service not available - skipping reset")
-            return False
-        
-        # Reset to workspace center
-        req = SetEntityState.Request()
-        req.state = EntityState()
-        req.state.name = "tb3"
-        req.state.pose.position.x = (X_MIN + X_MAX) / 2.0
-        req.state.pose.position.y = (Y_MIN + Y_MAX) / 2.0
-        req.state.pose.position.z = 0.1
-        req.state.pose.orientation.w = 1.0
-        
-        future = reset_cli.call_async(req)
-        
-        # Wait with shorter timeout and don't block
-        try:
-            rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)  # Shorter timeout
-        except Exception as e:
-            self.get_logger().warn(f"Exception waiting for reset service: {e}")
-            return False
-        
-        # Check if future is done
-        if not future.done():
-            self.get_logger().warn("Reset service call timed out - service may be slow")
-            return False
-        
-        try:
-            result = future.result()
-        except Exception as e:
-            self.get_logger().warn(f"Exception getting reset result: {e}")
-            return False
-            
-        if result is None:
-            self.get_logger().warn("Reset service call returned None")
-            return False
-        
-        if result.success:
-            self.get_logger().info("Robot position reset to workspace center")
+        success = reset_robot_position(self)
+        if success:
             # Reset stuck detection after successful reset
             self._last_stuck_check = None
             self._last_stuck_dist = None
-            return True
-        else:
-            self.get_logger().warn("Reset failed: service returned success=False")
-            return False
+        return success
 
     def _virtual_pickup(self, item_name, task_class):
         """Virtual pickup: delete item from pickup zone."""
@@ -435,16 +323,7 @@ class SortingNode(Node):
         if item_name in self.active_items:
             self.active_items[item_name]['picked'] = True
         
-        if not self.delete_client.service_is_ready():
-            self.get_logger().warn("Gazebo service not ready - simulating pickup")
-            return True
-        
-        req = DeleteEntity.Request()
-        req.name = item_name
-        future = self.delete_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-        
-        if future.result() and future.result().success:
+        if delete_entity(self, self.delete_client, item_name):
             self.get_logger().info(f"Picked up {task_class} item: {item_name}")
             return True
         else:
@@ -462,30 +341,50 @@ class SortingNode(Node):
         
         dock_x, dock_y = self.drop_docks[task_class]
         
-        # Use same color as pickup for consistency
-        colors = {
-            'A': [0.8, 0.2, 0.2, 1.0],  # Red
-            'B': [0.2, 0.8, 0.2, 1.0],  # Green
-            'C': [0.2, 0.2, 0.8, 1.0],  # Blue
-        }
-        
         # Generate SDF with same properties as pickup item
-        item_sdf = self._generate_item_sdf(item_id, colors[task_class])
+        color_rgba = get_item_color(task_class)
+        item_sdf = generate_item_sdf(item_id, color_rgba)
         
         # Spawn at dock location
-        if self._spawn_item(item_id, item_sdf, dock_x, dock_y, 0.15):
+        if spawn_entity(self, self.spawn_client, item_id, item_sdf, dock_x, dock_y, 0.15):
             self.get_logger().info(f"Dropped {task_class} item ({item_id}) at DOCK_{task_class} ({dock_x:.1f}, {dock_y:.1f})")
             return True
         else:
             self.get_logger().warn(f"Failed to spawn at dock - simulating dropoff")
             return True  # Continue anyway
 
+    def _spawn_blue_box_at_dock(self, x, y):
+        """Spawn blue box marker at dock location for visual docking."""
+        return spawn_blue_box_at_dock(self, self.spawn_client, self.task_class, x, y)
+
+    def _delete_blue_box(self):
+        """Delete blue box marker after docking."""
+        return delete_blue_box(self, self.delete_client, self.task_class)
+
+    def _reset_task_state(self):
+        """Reset state after task completion."""
+        self.current_task = None
+        self.task_class = None
+        self.current_item_id = None
+        self.phase = "IDLE"
+        self.current_goal = None
+        self.task_start_time = None
+        self.docking_complete = False
+        self.blue_marker_detected = False
+        self.blue_marker_area = 0
+        self.blue_marker_centered = False
+        self.blue_marker_error_x = 0
+        self.docking_stable_time = None
+        
+        if not self.task_queue:
+            self.get_logger().info("All tasks completed!")
+
     def task_manager(self):
         """Manage task queue and FSM transitions."""
         now = time.time()
 
         # Check for collision or stuck (only during active navigation)
-        if self.phase in ["GO_PICKUP", "GO_DROPOFF"]:
+        if self.phase in ["GO_PICKUP", "GO_DROPOFF", "GO_DOCKING"]:
             # Enable collision checking after 2 seconds (let robot settle)
             if self._start_time is None:
                 self._start_time = time.time()
@@ -566,22 +465,66 @@ class SortingNode(Node):
                 
                 self.get_logger().info(f"[Task] {self.current_task}: Picked up {item_id}. Going to DOCK_{self.current_task} @ ({self.current_goal[0]:.1f}, {self.current_goal[1]:.1f})")
 
-        elif self.phase == "GO_DROPOFF" and self._goal_reached():
-            # Reached dock: drop off item
-            item_id = getattr(self, 'current_item_id', None)
-            self._virtual_dropoff(self.task_class, item_id)
-            self.get_logger().info(f"[Task] ✓ Completed sorting {self.current_task} item")
-                
-            # Reset for next task
-            self.current_task = None
-            self.task_class = None
-            self.current_item_id = None
-            self.phase = "IDLE"
-            self.current_goal = None
-            self.task_start_time = None
+        elif self.phase == "GO_DROPOFF":
+            dist_to_dock = self._distance_to_goal()
             
-            if not self.task_queue:
-                    self.get_logger().info("All tasks completed!")
+            # Transition to docking when close enough (within 1.5m)
+            if dist_to_dock < self.docking_transition_distance:
+                self.phase = "GO_DOCKING"
+                self.docking_start_time = now
+                self.docking_complete = False
+                self.blue_marker_detected = False
+                self.blue_marker_area = 0
+                self.blue_marker_centered = False
+                self.blue_marker_error_x = 0
+                self.docking_stable_time = None
+                
+                # Spawn blue box at dock location
+                dock_x, dock_y = self.drop_docks[self.task_class]
+                if self._spawn_blue_box_at_dock(dock_x, dock_y):
+                    self.get_logger().info(f"[Task] {self.current_task}: Starting color-based docking at DOCK_{self.task_class}")
+                else:
+                    self.get_logger().warn("Failed to spawn blue box - completing task without docking")
+                    # Fallback: complete task without docking
+                    item_id = getattr(self, 'current_item_id', None)
+                    self._virtual_dropoff(self.task_class, item_id)
+                    self._reset_task_state()
+            
+            # Fallback: if PPO gets very close using old method, also transition to docking
+            elif self._goal_reached():
+                self.phase = "GO_DOCKING"
+                self.docking_start_time = now
+                self.docking_complete = False
+                self.blue_marker_detected = False
+                self.blue_marker_area = 0
+                self.blue_marker_centered = False
+                self.blue_marker_error_x = 0
+                self.docking_stable_time = None
+                dock_x, dock_y = self.drop_docks[self.task_class]
+                if self._spawn_blue_box_at_dock(dock_x, dock_y):
+                    self.get_logger().info(f"[Task] {self.current_task}: Starting color-based docking at DOCK_{self.task_class}")
+
+        elif self.phase == "GO_DOCKING":
+            # Check docking completion
+            if self.docking_complete:
+                # Docking successful!
+                item_id = getattr(self, 'current_item_id', None)
+                self._virtual_dropoff(self.task_class, item_id)
+                self.get_logger().info(f"[Task] ✓ Completed docking and sorting {self.current_task} item")
+                
+                # Clean up blue box
+                self._delete_blue_box()
+                
+                # Reset for next task
+                self._reset_task_state()
+                
+            elif self.docking_start_time and (now - self.docking_start_time) > self.max_docking_time:
+                # Timeout - docking took too long
+                self.get_logger().warn("Docking timeout - completing task anyway")
+                item_id = getattr(self, 'current_item_id', None)
+                self._virtual_dropoff(self.task_class, item_id)
+                self._delete_blue_box()
+                self._reset_task_state()
 
     def _advance_phase(self):
         """Advance to next phase on timeout."""
@@ -599,9 +542,27 @@ class SortingNode(Node):
             self.phase = "IDLE"
             self.current_goal = None
             self.task_start_time = None
+        elif self.phase == "GO_DOCKING":
+            # Docking timeout: complete task and reset
+            item_id = getattr(self, 'current_item_id', None)
+            self._virtual_dropoff(self.task_class, item_id)
+            self._delete_blue_box()
+            self._reset_task_state()
 
     def control_step(self):
-        """PPO control loop."""
+        """PPO control loop or color-based docking control."""
+        # DOCKING PHASE: Use color-based control
+        if self.phase == "GO_DOCKING":
+            msg = Twist()
+            linear_x, angular_z = calculate_docking_control(
+                self.blue_marker_detected, self.blue_marker_error_x
+            )
+            msg.linear.x = linear_x
+            msg.angular.z = angular_z
+            self.cmd_pub.publish(msg)
+            return
+        
+        # PPO CONTROL for other phases
         if self.current_goal is None:
             msg = Twist()
             self.cmd_pub.publish(msg)
@@ -640,12 +601,8 @@ class SortingNode(Node):
         
         for item_id in list(self.active_items.keys()):
             if self.active_items[item_id]['spawned']:
-                req = DeleteEntity.Request()
-                req.name = item_id
-                future = self.delete_client.call_async(req)
                 try:
-                    rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
-                    if future.result() and future.result().success:
+                    if delete_entity(self, self.delete_client, item_id):
                         self.get_logger().info(f"Cleaned up {item_id}")
                 except Exception as e:
                     self.get_logger().warn(f"Exception cleaning up {item_id}: {e}")
