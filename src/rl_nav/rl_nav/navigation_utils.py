@@ -153,7 +153,7 @@ def process_scan_to_bins(scan_msg, num_bins=None, max_range=None):
             v = max_range
         if v < min_dist:
             min_dist = v
-        if v < 0.18:
+        if v < 0.12:  # Match collision threshold (10cm + margin)
             collision = True
         bins.append(min(v, max_range) / max_range)
         if len(bins) == num_bins:

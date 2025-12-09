@@ -109,6 +109,7 @@ class SortingNode(Node):
         self._last_stuck_dist = None  # For stuck detection
         self._collision_check_enabled = False  # Delay collision checking
         self._start_time = None  # Track when node started
+        self._last_collision_time = None  # Debounce collision detection
 
         # Object tracking: maps task_class -> list of item IDs
         self.items_at_pickup = {}  # Maps task_class -> list of item IDs
@@ -235,7 +236,7 @@ class SortingNode(Node):
 
     def _check_collision(self):
         """Check if robot is too close to obstacles."""
-        return check_collision(self.scan, 3.5, 0.15)
+        return check_collision(self.scan, 3.5, 0.10)  # 10cm threshold
 
     def _check_stuck(self):
         """Check if robot is stuck (distance not improving)."""
@@ -302,6 +303,10 @@ class SortingNode(Node):
                 self.get_logger().info(f"Spawned {item_id} at pickup ({item_x:.2f}, {item_y:.2f})")
             else:
                 self.get_logger().warn(f"Failed to spawn {item_id}")
+            
+            # Rate limiting: delay between spawns to prevent overwhelming Gazebo
+            if idx < len(item_list) - 1:
+                time.sleep(0.5)
         
         if spawned_count > 0:
             self.get_logger().info(f"Spawned {spawned_count} items for task {task_class}")
@@ -393,16 +398,19 @@ class SortingNode(Node):
             
             # Only check collisions after delay
             if self._collision_check_enabled and self._check_collision():
-                self.get_logger().warn("Collision detected! Resetting robot position...")
-                if self._reset_robot_position():
-                    # Reset task start time to give it another chance
+                # Debounce: only reset if collision persists for 3 seconds
+                now = time.time()
+                if self._last_collision_time is None:
+                    self._last_collision_time = now
+                elif now - self._last_collision_time >= 3.0:
+                    self.get_logger().warn("Persistent collision detected! Resetting robot position...")
+                    self._reset_robot_position()  # Non-blocking
                     self.task_start_time = time.time()
+                    self._last_collision_time = None
                     return
-                else:
-                    # If reset fails, skip to next phase
-                    self.get_logger().warn("Reset failed, advancing phase")
-                    self._advance_phase()
-                    return
+            else:
+                # No collision - reset debounce timer
+                self._last_collision_time = None
             
             if self._check_stuck():
                 self.get_logger().warn("Robot stuck! Resetting position...")
