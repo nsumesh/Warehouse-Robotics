@@ -189,10 +189,33 @@ def spawn_blue_box_at_dock(node: Node, spawn_client, task_class: str, x: float, 
     Returns:
         bool: True if successful, False otherwise
     """
-    blue_box_path = os.path.expanduser("~/MSML642FinalProject/gazebo_models/blue_box/model.sdf")
-    if not os.path.exists(blue_box_path):
-        node.get_logger().error(f"Blue box model not found at {blue_box_path}")
+    # Find project root by looking for gazebo_models directory
+    # Start from this file's location and go up to find project root
+    current_file = os.path.abspath(__file__)
+    project_root = None
+    
+    # Try multiple possible paths
+    search_paths = [
+        # Relative to current file (src/rl_nav/rl_nav/gazebo_utils.py -> project root)
+        os.path.join(os.path.dirname(current_file), "../../../"),
+        # Common project directory names
+        os.path.expanduser("~/MSML642FinalProject"),
+        os.path.expanduser("~/MSML_642_FinalProject"),
+    ]
+    
+    for path in search_paths:
+        abs_path = os.path.abspath(path)
+        blue_box_path = os.path.join(abs_path, "gazebo_models", "blue_box", "model.sdf")
+        if os.path.exists(blue_box_path):
+            project_root = abs_path
+            break
+    
+    if not project_root:
+        node.get_logger().error("Could not find project root with gazebo_models/blue_box/model.sdf")
+        node.get_logger().error(f"Searched in: {search_paths}")
         return False
+    
+    blue_box_path = os.path.join(project_root, "gazebo_models", "blue_box", "model.sdf")
     
     with open(blue_box_path, "r") as f:
         sdf_xml = f.read()

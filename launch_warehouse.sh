@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 
-cd ~/MSML642FinalProject
+# Get the directory where this script is located (project root)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 source install/setup.bash
 
 WORLD_FILE=$(ros2 pkg prefix warehouse_sim)/share/warehouse_sim/worlds/warehouse_empty.world
