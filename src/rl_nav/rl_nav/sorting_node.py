@@ -506,21 +506,30 @@ class SortingNode(Node):
                 self.blue_marker_error_x = 0
                 self.docking_stable_time = None
                 
-                # Spawn blue box offset from dock so robot stops ~2-3m short
+                # Spawn blue box 2-3m away from robot's current position (away from dock)
+                # This ensures the box never spawns under the robot
                 dock_x, dock_y = self.drop_docks[self.task_class]
-                dx = dock_x - self.pose[0]
-                dy = dock_y - self.pose[1]
-                dist = math.hypot(dx, dy)
-                desired_offset = 2.5  # meters
-                # Keep target in front of the robot but avoid negative/zero offset if already close
-                max_offset = max(dist - 0.5, 0.5)
-                offset_dist = min(desired_offset, max_offset)
-                if dist > 0.1:
-                    scale = offset_dist / dist
-                    target_x = dock_x - dx * scale
-                    target_y = dock_y - dy * scale
+                robot_x, robot_y = self.pose[0], self.pose[1]
+                
+                # Calculate vector from robot to dock
+                dx = dock_x - robot_x
+                dy = dock_y - robot_y
+                dist_to_dock = math.hypot(dx, dy)
+                
+                # Target should be 2.5m away from robot, in direction AWAY from dock
+                # This makes robot back up to dock position
+                desired_offset = 2.5  # meters from robot
+                
+                if dist_to_dock > 0.1:
+                    # Normalize direction vector and place target 2.5m away from robot
+                    # in direction away from dock (negative direction)
+                    norm = dist_to_dock
+                    target_x = robot_x - (dx / norm) * desired_offset
+                    target_y = robot_y - (dy / norm) * desired_offset
                 else:
-                    target_x, target_y = dock_x, dock_y
+                    # Fallback: if robot is exactly at dock, place target 2.5m behind robot
+                    target_x = robot_x - 2.5
+                    target_y = robot_y
 
                 if self._spawn_blue_box_at_dock(target_x, target_y):
                     self.get_logger().info(
