@@ -1,5 +1,5 @@
 warehouse_x_limit_min, warehouse_x_limit_max = -7.0, 2.0
-warehouse_y_limit_min, warehouse_y_limit_x = -3.0, 3.0
+warehouse_y_limit_min, warehouse_y_limit_max = -3.0, 3.0
 dockA = (-6.5, -2.0)  
 dockB = (-6.5, 0.0)   
 dockC = (-6.5, 2.0)
