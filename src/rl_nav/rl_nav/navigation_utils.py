@@ -113,7 +113,7 @@ def check_stuck(current_dist, last_stuck_check_time, last_stuck_dist,
             improvement_threshold = 0.2
         
         # If distance hasn't improved by threshold, consider stuck
-        if abs(current_dist - last_stuck_dist) < improvement_threshold:
+        if (last_stuck_dist - current_dist) < improvement_threshold:
             return True, now, current_dist
         return False, now, current_dist
     
