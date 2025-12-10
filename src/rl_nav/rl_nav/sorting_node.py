@@ -494,7 +494,8 @@ class SortingNode(Node):
                 self.get_logger().info(f"[Task] ✓ Dropped off {self.current_task} item at DOCK_{self.task_class} (0.7m threshold)")
             
             # Check if this is the last task - transition to docking when close enough (1.5m)
-            if not self.task_queue and dist_to_dock < self.docking_transition_distance:
+            # BUT only after item has been dropped (at 0.7m)
+            if not self.task_queue and self._item_dropped_for_current_task and dist_to_dock < self.docking_transition_distance:
                 # All tasks done - now perform final docking
                 self.phase = "GO_DOCKING"
                 self.docking_start_time = now
