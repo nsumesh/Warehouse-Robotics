@@ -104,7 +104,7 @@ class SortingNode(Node):
         self.current_task = None
         self.phase = "IDLE"  # IDLE → GO_PICKUP → GO_DROPOFF → GO_DOCKING → IDLE
         self.task_start_time = None
-        self.max_task_time = 180.0  # Increased timeout for better navigation
+        self.max_task_time = 480.0  # Increased timeout for better navigation
         self._last_log_time = None  # For debug logging
         self._last_stuck_check = None  # For stuck detection
         self._last_stuck_dist = None  # For stuck detection
@@ -207,7 +207,7 @@ class SortingNode(Node):
     def _build_initial_tasks(self, num_tasks=5):
         """Build task queue and assign item IDs."""
         categories = ['A', 'B', 'C']
-        self.task_queue = ['A']
+        self.task_queue = ['B','C']
         
         # Initialize items_at_pickup dictionary
         for task_class in categories:
@@ -241,17 +241,17 @@ class SortingNode(Node):
         """Check if robot is too close to obstacles."""
         return check_collision(self.scan, 3.5, 0.10)  # 10cm threshold
 
-    def _check_stuck(self):
-        """Check if robot is stuck (distance not improving)."""
-        current_dist = self._distance_to_goal()
-        is_stuck, new_check_time, new_dist = check_stuck(
-            current_dist, self._last_stuck_check, self._last_stuck_dist
-        )
-        self._last_stuck_check = new_check_time
-        self._last_stuck_dist = new_dist
-        if is_stuck:
-            self.get_logger().warn(f"Robot appears stuck: dist={current_dist:.2f}m (no improvement)")
-        return is_stuck
+    # def _check_stuck(self):
+    #     """Check if robot is stuck (distance not improving)."""
+    #     current_dist = self._distance_to_goal()
+    #     is_stuck, new_check_time, new_dist = check_stuck(
+    #         current_dist, self._last_stuck_check, self._last_stuck_dist
+    #     )
+    #     self._last_stuck_check = new_check_time
+    #     self._last_stuck_dist = new_dist
+    #     if is_stuck:
+    #         self.get_logger().warn(f"Robot appears stuck: dist={current_dist:.2f}m (no improvement)")
+    #     return is_stuck
 
 
     def _spawn_items_for_current_task(self):
@@ -491,7 +491,7 @@ class SortingNode(Node):
                 item_id = getattr(self, 'current_item_id', None)
                 self._virtual_dropoff(self.task_class, item_id)
                 self._item_dropped_for_current_task = True
-                self.get_logger().info(f"[Task] ✓ Dropped off {self.current_task} item at DOCK_{self.task_class} (0.7m threshold)")
+                self.get_logger().info(f"Dropped off {self.current_task} item at DOCK_{self.task_class} (0.7m threshold)")
             
             # Check if this is the last task - transition to docking when close enough (1.5m)
             # BUT only after item has been dropped (at 0.7m)
@@ -548,7 +548,7 @@ class SortingNode(Node):
             # Check docking completion
             if self.docking_complete:
                 # Final docking successful!
-                self.get_logger().info(f"[Final] ✓ Completed final docking at DOCK_{self.task_class}")
+                self.get_logger().info(f"Completed final docking at DOCK_{self.task_class}")
                 
                 # Clean up blue box
                 self._delete_blue_box()
