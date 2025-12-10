@@ -118,6 +118,7 @@ class SortingNode(Node):
         self.item_counter = {'A': 0, 'B': 0, 'C': 0}  # Counter for unique IDs
         self.current_item_id = None  # Store current item ID for dropoff
         self._items_spawned_for_current_task = False  # Track if items spawned for current task
+        self._item_dropped_for_current_task = False  # Track if item dropped for current task
         self.dropped_items = {}  # Maps item_id -> {'dropoff_time': timestamp, 'task_class': 'A'}
 
         # Docking state variables
@@ -383,6 +384,7 @@ class SortingNode(Node):
         self.blue_marker_centered = False
         self.blue_marker_error_x = 0
         self.docking_stable_time = None
+        self._item_dropped_for_current_task = False # Reset the flag
         
         if not self.task_queue:
             self.get_logger().info("All tasks completed!")
@@ -443,6 +445,7 @@ class SortingNode(Node):
             self._goal_reached_time = None  # Reset goal reached timer
             self.task_class = None  # No task class yet (not picked up)
             self._items_spawned_for_current_task = False  # Reset spawn flag for new task
+            self._item_dropped_for_current_task = False # Reset dropoff flag for new task
             self.get_logger().info(f"[Task] {self.current_task}: Going to PICKUP @ ({self.pickup_location[0]:.1f}, {self.pickup_location[1]:.1f})")
 
         elif self.phase == "GO_PICKUP":
@@ -482,38 +485,37 @@ class SortingNode(Node):
         elif self.phase == "GO_DROPOFF":
             dist_to_dock = self._distance_to_goal()
             
-            # Check if we've reached the dock (close enough or goal reached)
-            reached_dock = (dist_to_dock < self.docking_transition_distance) or self._goal_reached()
-            
-            if reached_dock:
+            # Drop item when goal reached (0.7m) - consistent with training SUCCESS_RADIUS
+            if self._goal_reached() and not self._item_dropped_for_current_task:
                 # Drop off the item first
                 item_id = getattr(self, 'current_item_id', None)
                 self._virtual_dropoff(self.task_class, item_id)
-                self.get_logger().info(f"[Task] ✓ Dropped off {self.current_task} item at DOCK_{self.task_class}")
+                self._item_dropped_for_current_task = True
+                self.get_logger().info(f"[Task] ✓ Dropped off {self.current_task} item at DOCK_{self.task_class} (0.7m threshold)")
+            
+            # Check if this is the last task - transition to docking when close enough (1.5m)
+            if not self.task_queue and dist_to_dock < self.docking_transition_distance:
+                # All tasks done - now perform final docking
+                self.phase = "GO_DOCKING"
+                self.docking_start_time = now
+                self.docking_complete = False
+                self.blue_marker_detected = False
+                self.blue_marker_area = 0
+                self.blue_marker_centered = False
+                self.blue_marker_error_x = 0
+                self.docking_stable_time = None
                 
-                # Check if this is the last task - only dock when all tasks are complete
-                if not self.task_queue:
-                    # All tasks done - now perform final docking
-                    self.phase = "GO_DOCKING"
-                    self.docking_start_time = now
-                    self.docking_complete = False
-                    self.blue_marker_detected = False
-                    self.blue_marker_area = 0
-                    self.blue_marker_centered = False
-                    self.blue_marker_error_x = 0
-                    self.docking_stable_time = None
-                    
-                    # Spawn blue box at dock location for final docking
-                    dock_x, dock_y = self.drop_docks[self.task_class]
-                    if self._spawn_blue_box_at_dock(dock_x, dock_y):
-                        self.get_logger().info(f"[Final] All tasks complete! Starting final docking at DOCK_{self.task_class}")
-                    else:
-                        self.get_logger().warn("Failed to spawn blue box - completing without final docking")
-                        self._reset_task_state()
+                # Spawn blue box at dock location for final docking
+                dock_x, dock_y = self.drop_docks[self.task_class]
+                if self._spawn_blue_box_at_dock(dock_x, dock_y):
+                    self.get_logger().info(f"[Final] All tasks complete! Starting final docking at DOCK_{self.task_class}")
                 else:
-                    # More tasks remaining - skip docking and move to next task
-                    self.get_logger().info(f"[Task] {self.current_task} complete. {len(self.task_queue)} task(s) remaining.")
+                    self.get_logger().warn("Failed to spawn blue box - completing without final docking")
                     self._reset_task_state()
+            elif self._item_dropped_for_current_task and self.task_queue:
+                # Item dropped and more tasks remaining - move to next task
+                self.get_logger().info(f"[Task] {self.current_task} complete. {len(self.task_queue)} task(s) remaining.")
+                self._reset_task_state()
 
         elif self.phase == "GO_DOCKING":
             # Check docking completion
