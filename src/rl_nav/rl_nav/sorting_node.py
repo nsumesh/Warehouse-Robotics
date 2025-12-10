@@ -207,7 +207,7 @@ class SortingNode(Node):
     def _build_initial_tasks(self, num_tasks=5):
         """Build task queue and assign item IDs."""
         categories = ['A', 'B', 'C']
-        self.task_queue = [random.choice(categories) for _ in range(num_tasks)]
+        self.task_queue = ['A']
         
         # Initialize items_at_pickup dictionary
         for task_class in categories:
