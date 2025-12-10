@@ -35,7 +35,7 @@ from rl_nav.gazebo_utils import (
 )
 from rl_nav.item_utils import generate_item_sdf, get_item_color
 from rl_nav.navigation_utils import (
-    distance_to_goal, goal_reached, check_collision, check_stuck, process_scan_to_bins
+    distance_to_goal, goal_reached, check_collision, process_scan_to_bins
 )
 from rl_nav.docking_utils import (
     process_camera_image, is_docking_complete, calculate_docking_control
@@ -420,15 +420,15 @@ class SortingNode(Node):
                 # No collision - reset debounce timer
                 self._last_collision_time = None
             
-            if self._check_stuck():
-                self.get_logger().warn("Robot stuck! Resetting position...")
-                if self._reset_robot_position():
-                    self.task_start_time = time.time()
-                    return
-                else:
-                    self.get_logger().warn("Reset failed, skipping task")
-                    self._advance_phase()
-                    return
+            # if self._check_stuck():
+            #     self.get_logger().warn("Robot stuck! Resetting position...")
+            #     if self._reset_robot_position():
+            #         self.task_start_time = time.time()
+            #         return
+            #     else:
+            #         self.get_logger().warn("Reset failed, skipping task")
+            #         self._advance_phase()
+            #         return
 
         # Timeout check
         if self.task_start_time and (now - self.task_start_time) > self.max_task_time:

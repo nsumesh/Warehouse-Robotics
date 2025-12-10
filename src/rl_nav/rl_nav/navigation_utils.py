@@ -80,44 +80,44 @@ def check_collision(scan, max_range=None, threshold=0.15):
     return min_dist < threshold
 
 
-def check_stuck(current_dist, last_stuck_check_time, last_stuck_dist, 
-                improvement_threshold=0.05, check_interval=15.0, close_threshold=1.5):
-    """
-    Check if robot is stuck (distance not improving).
+# def check_stuck(current_dist, last_stuck_check_time, last_stuck_dist, 
+#                 improvement_threshold=0.001, check_interval=15.0, close_threshold=1.5):
+#     """
+#     Check if robot is stuck (distance not improving).
     
-    Args:
-        current_dist: Current distance to goal
-        last_stuck_check_time: Last time stuck check was performed
-        last_stuck_dist: Distance at last stuck check
-        improvement_threshold: Required improvement in meters
-        check_interval: Time interval between checks in seconds
-        close_threshold: Distance below which to use more lenient threshold
+#     Args:
+#         current_dist: Current distance to goal
+#         last_stuck_check_time: Last time stuck check was performed
+#         last_stuck_dist: Distance at last stuck check
+#         improvement_threshold: Required improvement in meters
+#         check_interval: Time interval between checks in seconds
+#         close_threshold: Distance below which to use more lenient threshold
     
-    Returns:
-        tuple: (is_stuck: bool, new_check_time: float, new_dist: float)
-    """
-    # Don't check for stuck if very close to goal
-    if current_dist < 1.0:
-        return False, last_stuck_check_time, last_stuck_dist
+#     Returns:
+#         tuple: (is_stuck: bool, new_check_time: float, new_dist: float)
+#     """
+#     # Don't check for stuck if very close to goal
+#     if current_dist < 1.0:
+#         return False, last_stuck_check_time, last_stuck_dist
     
-    if last_stuck_check_time is None:
-        return False, time.time(), current_dist
+#     if last_stuck_check_time is None:
+#         return False, time.time(), current_dist
     
-    # Check every check_interval seconds
-    now = time.time()
-    if now - last_stuck_check_time > check_interval:
-        # If robot is close to goal, be more lenient
-        if current_dist < close_threshold:
-            improvement_threshold = 0.1
-        else:
-            improvement_threshold = 0.2
+#     # Check every check_interval seconds
+#     now = time.time()
+#     if now - last_stuck_check_time > check_interval:
+#         # If robot is close to goal, be more lenient
+#         if current_dist < close_threshold:
+#             improvement_threshold = 0.1
+#         else:
+#             improvement_threshold = 0.2
         
-        # If distance hasn't improved by threshold, consider stuck
-        if abs(current_dist - last_stuck_dist) < improvement_threshold:
-            return True, now, current_dist
-        return False, now, current_dist
+#         # If distance hasn't improved by threshold, consider stuck
+#         if last_stuck_dist-current_dist < improvement_threshold:
+#             return True, now, current_dist
+#         return False, now, current_dist
     
-    return False, last_stuck_check_time, last_stuck_dist
+#     return False, last_stuck_check_time, last_stuck_dist
 
 
 def process_scan_to_bins(scan_msg, num_bins=None, max_range=None):
