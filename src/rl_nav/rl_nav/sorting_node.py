@@ -27,7 +27,7 @@ from stable_baselines3 import PPO
 # Import constants and utilities
 from rl_nav.constants import (
     DOCK_A, DOCK_B, DOCK_C, PICKUP, SUCCESS_RADIUS, X_MIN, X_MAX, Y_MIN, Y_MAX,
-    ACTIONS, DOCKING_TRANSITION_DISTANCE
+    ACTIONS, DOCKING_TRANSITION_DISTANCE, MAX_DOCKING_TIME
 )
 from rl_nav.gazebo_utils import (
     spawn_tb3, spawn_entity, delete_entity, reset_robot_position,
@@ -129,7 +129,7 @@ class SortingNode(Node):
         self.docking_complete = False
         self.docking_stable_time = None
         self.docking_stable_duration = 3.0
-        self.max_docking_time = 30.0
+        self.max_docking_time = MAX_DOCKING_TIME
         self.docking_start_time = None
         self.docking_transition_distance = DOCKING_TRANSITION_DISTANCE
 
