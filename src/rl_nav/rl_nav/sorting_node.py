@@ -506,10 +506,27 @@ class SortingNode(Node):
                 self.blue_marker_error_x = 0
                 self.docking_stable_time = None
                 
-                # Spawn blue box at dock location for final docking
+                # Spawn blue box offset from dock so robot stops ~2-3m short
                 dock_x, dock_y = self.drop_docks[self.task_class]
-                if self._spawn_blue_box_at_dock(dock_x, dock_y):
-                    self.get_logger().info(f"[Final] All tasks complete! Starting final docking at DOCK_{self.task_class}")
+                dx = dock_x - self.pose[0]
+                dy = dock_y - self.pose[1]
+                dist = math.hypot(dx, dy)
+                desired_offset = 2.5  # meters
+                # Keep target in front of the robot but avoid negative/zero offset if already close
+                max_offset = max(dist - 0.5, 0.5)
+                offset_dist = min(desired_offset, max_offset)
+                if dist > 0.1:
+                    scale = offset_dist / dist
+                    target_x = dock_x - dx * scale
+                    target_y = dock_y - dy * scale
+                else:
+                    target_x, target_y = dock_x, dock_y
+
+                if self._spawn_blue_box_at_dock(target_x, target_y):
+                    self.get_logger().info(
+                        f"[Final] All tasks complete! Docking target offset from DOCK_{self.task_class} "
+                        f"at ({target_x:.2f}, {target_y:.2f})"
+                    )
                 else:
                     self.get_logger().warn("Failed to spawn blue box - completing without final docking")
                     self._reset_task_state()
