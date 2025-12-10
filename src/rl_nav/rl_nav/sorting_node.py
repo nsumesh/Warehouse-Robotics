@@ -129,7 +129,7 @@ class SortingNode(Node):
         self.docking_complete = False
         self.docking_stable_time = None
         self.docking_stable_duration = 3.0
-        self.max_docking_time = 30.0
+        self.max_docking_time = 90.0  # Increased to allow time to approach offset blue box
         self.docking_start_time = None
         self.docking_transition_distance = DOCKING_TRANSITION_DISTANCE
 
@@ -555,7 +555,16 @@ class SortingNode(Node):
                 
                 # Reset for next task (will be IDLE since queue is empty)
                 self._reset_task_state()
-                
+            
+            # Distance-based fallback: if robot is close enough to dock, consider it complete
+            elif self.task_class:
+                dock_x, dock_y = self.drop_docks[self.task_class]
+                dist_to_dock = math.hypot(self.pose[0] - dock_x, self.pose[1] - dock_y)
+                if dist_to_dock < SUCCESS_RADIUS:
+                    self.get_logger().info(f"[Final] ✓ Completed final docking at DOCK_{self.task_class} (distance-based: {dist_to_dock:.2f}m)")
+                    self._delete_blue_box()
+                    self._reset_task_state()
+            
             elif self.docking_start_time and (now - self.docking_start_time) > self.max_docking_time:
                 # Timeout - final docking took too long
                 self.get_logger().warn("Final docking timeout - completing anyway")
