@@ -37,7 +37,7 @@ from rl_nav.item_utils import generate_item_sdf, get_item_color
 from rl_nav.navigation_utils import (
     distance_to_goal, goal_reached, check_collision, process_scan_to_bins
 )
-from rl_nav.docking_utils import (
+from rl_nav.rl_nav.docking_functions import (
     process_camera_image, is_docking_complete, calculate_docking_control
 )
 from rl_nav.observation_utils import build_observation

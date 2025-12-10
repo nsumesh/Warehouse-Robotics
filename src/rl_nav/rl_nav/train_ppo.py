@@ -1,21 +1,3 @@
-#!/usr/bin/env python3
-"""
-PPO training for simplified warehouse navigation with virtual sorting.
-
-This implements a 3-stage curriculum:
-- Stage 1: Short local docking near DOCK_A
-- Stage 2: Longer aisle navigation to DOCK_A
-- Stage 3: Virtual sorting between DOCK_A/DOCK_B/DOCK_C
-
-Usage:
-  ros2 run rl_nav train_ppo --timesteps 20000 --curriculum-stage 1
-
-Parallel seeds (for robustness):
-  Run multiple seeds in separate terminals:
-  Terminal 1: ros2 run rl_nav train_ppo --timesteps 80000 --curriculum-stage 3 --seed 0
-  Terminal 2: ros2 run rl_nav train_ppo --timesteps 80000 --curriculum-stage 3 --seed 1
-  Terminal 3: ros2 run rl_nav train_ppo --timesteps 80000 --curriculum-stage 3 --seed 2
-"""
 import os
 import math
 import time
@@ -37,23 +19,15 @@ from stable_baselines3 import PPO
 import torch
 
 # Import constants and utilities
-from rl_nav.constants import (
-    X_MIN, X_MAX, Y_MIN, Y_MAX, DOCK_A, DOCK_B, DOCK_C, PICKUP,
-    SUCCESS_RADIUS, CLOSE_RADIUS, ACTIONS, MAX_RANGE, NUM_SCAN_BINS
-)
+from rl_nav.constants import (X_MIN, X_MAX, Y_MIN, Y_MAX, DOCK_A, DOCK_B, DOCK_C, PICKUP,SUCCESS_RADIUS, ACTIONS, MAX_RANGE, NUM_SCAN_BINS)
 from rl_nav.gazebo_utils import spawn_tb3, spawn_entity, delete_entity
 from rl_nav.item_utils import generate_item_sdf, get_item_color
 from rl_nav.navigation_utils import process_scan_to_bins
-from rl_nav.observation_utils import build_observation, encode_task_class_onehot
-from rl_nav.reward_utils import (
-    K_PROGRESS, K_TIME, K_COLLISION, K_SUCCESS, K_PICKUP_SUCCESS,
-    K_CLOSE_ZONE, K_WRONG_DOCK, calculate_progress_reward,
-    check_close_zone_bonus, check_dock_success
-)
+from rl_nav.observation_utils import build_observation
+from rl_nav.reward_utils import (K_PROGRESS, K_TIME, K_COLLISION, K_SUCCESS, K_PICKUP_SUCCESS,K_CLOSE_ZONE, K_WRONG_DOCK, calculate_progress_reward,check_close_zone_bonus, check_dock_success)
 
 
 class Tb3Env(Node):
-    """ROS2 environment for PPO training. Observation: 24 LiDAR bins + [dx, dy, yaw] + [task_class one-hot] = 30 dims."""
 
     def __init__(self, curriculum_stage=1):
         super().__init__("tb3_env")
