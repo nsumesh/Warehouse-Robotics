@@ -81,7 +81,7 @@ def check_collision(scan, max_range=None, threshold=0.15):
 
 
 def check_stuck(current_dist, last_stuck_check_time, last_stuck_dist, 
-                improvement_threshold=0.2, check_interval=15.0, close_threshold=1.5):
+                improvement_threshold=0.5, check_interval=15.0, close_threshold=1.5):
     """
     Check if robot is stuck (distance not improving).
     
