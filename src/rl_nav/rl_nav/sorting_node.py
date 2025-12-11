@@ -364,7 +364,12 @@ def main(args=None):
         except:
             pass
         return
-
+    
+    # Wait for sensors to initialize
+    node.get_logger().info("Waiting for sensors to initialize...")
+    import time
+    time.sleep(2.0)
+    
     node.get_logger().info("Starting tasks")
     try:
         rclpy.spin(node)
