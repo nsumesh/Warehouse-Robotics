@@ -90,11 +90,10 @@ class FSM:
             node.item_dropped_for_current_task = True
             node.get_logger().info("Dropped item at Dock "+str(node.task))
         if not node.task_queue and node.item_dropped_for_current_task:
-            if goal<node.docking_transition_distance:
-                node.phase = 'docking' 
-                node.docking_start_time = curr
-                node.prepare_docking()
-                return
+            node.phase = 'docking' 
+            node.docking_start_time = curr
+            node.prepare_docking()
+            return
         if node.item_dropped_for_current_task and node.task_queue:
             node.get_logger().info("The task has been completed, Remaining tasks: "+str(len(node.task_queue)))
             node.reset_task_state()
