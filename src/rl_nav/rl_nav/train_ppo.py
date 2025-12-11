@@ -30,8 +30,8 @@ class Tb3Env(Node):
     def __init__(self, curriculum_stage=1):
         super().__init__("tb3_env")
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
-        self.scan_sub = self.create_subscription(LaserScan, "/scan", self._on_scan, 10)
-        self.odom_sub = self.create_subscription(Odometry, "/odom", self._on_odom, 10)
+        self.scan_sub = self.create_subscription(LaserScan, "/scan", self.scan_into_bins, 10)
+        self.odom_sub = self.create_subscription(Odometry, "/odom", self.update_orientation, 10)
         self.reset_cli = self.create_client(SetEntityState, "/set_entity_state")
         self.max_range = max_clamp_range
         self.num_scan_bins = lidar_bins
@@ -108,7 +108,7 @@ class Tb3Env(Node):
             sx = dock_x + random.uniform(-0.5, 0.5)
             sy = dock_y + random.uniform(-0.5, 0.5)
             sx = max(warehouse_x_limit_min, min(warehouse_x_limit_max, sx))
-            sy = max(warehouse_x_limit_min, min(warehouse_y_limit_max, sy))
+            sy = max(warehouse_y_limit_min, min(warehouse_y_limit_max, sy))
             yaw = random.uniform(-math.pi, math.pi)
             gx, gy = dockA
             self.task = None
@@ -126,7 +126,7 @@ class Tb3Env(Node):
         self.task = random.choice(['A', 'B', 'C'])
         if self.task == 'A':
             dock_x, dock_y = dockA
-        elif self.task_class == 'B':
+        elif self.task == 'B':
             dock_x, dock_y = dockB
         else: 
             dock_x, dock_y = dockC
@@ -143,7 +143,7 @@ class Tb3Env(Node):
             scan = np.ones(self.num_scan_bins, dtype=np.float32)
         else:
             scan = self.scan
-        if (self.curriculum_stage == 3 and self.phase == "GO_DROPOFF"):
+        if (self.curriculum_stage == 3 and self.phase == "dropoff"):
             task_class = self.task
         else:
             task_class = None
@@ -187,10 +187,10 @@ class Tb3Env(Node):
         (sx, sy, syaw), (gx, gy) = self.start_and_goal()
         self.goal[:] = (gx, gy)
         
-        if self.curriculum_stage == 3 and self.task_class:
+        if self.curriculum_stage == 3 and self.task:
             if self.spawn_client:
                 self.spawn_client.wait_for_service(timeout_sec=2.0)
-            self.current_item_id = self.pickup_item_spawning(self.task_class)
+            self.current_item_id = self.pickup_item_spawning(self.task)
 
         if self.reset_cli.wait_for_service(timeout_sec=5.0):
             request = SetEntityState.Request()
@@ -210,7 +210,7 @@ class Tb3Env(Node):
         while (self.scan is None) and (time.time() - start_time < 2.0):
             rclpy.spin_once(self, timeout_sec=0.05)
         x,y = self.goal[0]-self.pose[0], self.goal[1]-self.pose[1]
-        self.prev_dist = float(math.hypot(x,y))
+        self.previous_dist = float(math.hypot(x,y))
         self.in_close_zone = False  
         return self.build_observation()
 
@@ -231,13 +231,13 @@ class Tb3Env(Node):
         self.previous_dist = current_distance
         reward-=time_penalty
         bonus, self.in_close_zone = close_zone_bonus(current_distance, self.in_close_zone, close_bonus)
-        reward += close_bonus
+        reward += bonus
         done = False
         success = False
         if self.collision:
             reward -= collision_penalty
             done = True
-        if self.curriculum_stage == 3 and self.task_class and not done:
+        if self.curriculum_stage == 3 and self.task and not done:
             if self.phase == "pickup":
                 pickup_distance = math.hypot(self.pose[0] - pickup[0], self.pose[1] - pickup[1])
                 if pickup_distance < success_region and not self.collision:
@@ -260,13 +260,13 @@ class Tb3Env(Node):
                         self.pickup_reached_time = None
             elif self.phase == "dropoff":
                 if current_distance < success_region and not self.collision:
-                    dock_success, wrong_dock, dock_id = docking_success(self.pose, self.task_class, success_region)
+                    dock_success, wrong_dock, dock_id = docking_success(self.pose, self.task, success_region)
                     if dock_success:
                         reward += final_success_reward
                         success = True
                         done = True
                     elif wrong_dock:
-                        reward-= wrong_dock
+                        reward -= wrong_dock
                         done = True
         elif current_distance < success_region and not self.collision and not done:
             reward+=final_success_reward
@@ -275,7 +275,7 @@ class Tb3Env(Node):
         if self.episode_steps >= self.max_steps:
             done = True
         self.cumulative_reward += reward
-        current_status = {"Distance to Goal": current_distance,"Stage": self.curriculum_stage,"Episode Steps": self.episode_steps,"Success (Binary)": success,"Task type": self.task_class,}
+        current_status = {"Distance to Goal": current_distance,"Stage": self.curriculum_stage,"Episode Steps": self.episode_steps,"Success (Binary)": success,"Task type": self.task,}
         return observation, reward, done, current_status
 
 class GymEnvironment(gym.Env):
