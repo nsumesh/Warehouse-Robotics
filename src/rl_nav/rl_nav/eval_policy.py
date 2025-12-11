@@ -3,15 +3,19 @@
 Evaluate trained PPO policy for warehouse navigation with virtual sorting.
 
 Example commands:
-# Evaluate Stage 2 model
-ros2 run rl_nav eval_policy --model-path ppo_runs/ppo_stage2.zip --curriculum-stage 2 --episodes 5
+# Evaluate Stage 1 model (20 episodes)
+ros2 run rl_nav eval_policy --model-path ppo_runs/ppo_stage1.zip --curriculum-stage 1 --episodes 20
 
-# Evaluate Stage 3 sorting model
-ros2 run rl_nav eval_policy --model-path ppo_runs/ppo_stage3_sorting.zip --curriculum-stage 3 --episodes 10
+# Evaluate Stage 2 model (20 episodes)
+ros2 run rl_nav eval_policy --model-path ppo_runs/ppo_stage2.zip --curriculum-stage 2 --episodes 20
+
+# Evaluate Stage 3 sorting model (20 episodes)
+ros2 run rl_nav eval_policy --model-path ppo_runs/ppo_stage3_sorting.zip --curriculum-stage 3 --episodes 20
 """
 import os
 import rclpy
-from rl_nav.train_ppo import Tb3Env, GymTb3, spawn_tb3
+from rl_nav.train_ppo import Tb3Env, GymEnvironment
+from rl_nav.gazebo_functions import robot_initilization
 from stable_baselines3 import PPO
 
 
@@ -35,14 +39,14 @@ def main():
     
     # Create environment with specified curriculum stage
     node = Tb3Env(curriculum_stage=args.curriculum_stage)
-    env = GymTb3(node)
+    env = GymEnvironment(node)
     
     # Load model
     model = PPO.load(args.model_path)
     print(f"Loaded model from {args.model_path}")
     print(f"Evaluating with curriculum stage {args.curriculum_stage} for {args.episodes} episodes\n")
 
-    if not spawn_tb3(node):
+    if not robot_initilization(node):
         node.get_logger().error("TB3 spawn failed")
         rclpy.shutdown()
         return
@@ -70,20 +74,26 @@ def main():
             final_info = info
 
         if final_info:
-            if final_info.get("success", False):
+            # Updated status dictionary keys to match train_ppo.py
+            success_binary = final_info.get("Success (Binary)", 0)
+            if success_binary == 1:
                 success_count += 1
-            if final_info.get("curriculum_stage") == 3 and final_info.get("task_class"):
-                task_info = f" (task={final_info['task_class']})"
+            
+            stage = final_info.get("Stage", args.curriculum_stage)
+            task_type = final_info.get("Task type", None)
+            
+            if stage == 3 and task_type:
+                task_info = f" (task={task_type})"
             else:
                 task_info = ""
             
-            dist = final_info.get("distance_to_goal", 0.0)
+            dist = final_info.get("Distance to Goal", 0.0)
             total_reward += episode_reward
             total_steps += episode_steps
             total_distance += dist
 
             print(f"Episode {ep+1}: reward={episode_reward:.2f} steps={episode_steps} "
-                  f"final_dist={dist:.2f}m success={final_info.get('success', False)}{task_info}")
+                  f"final_dist={dist:.2f}m success={success_binary==1}{task_info}")
 
     # Print aggregate statistics
     print("\n" + "="*50)
