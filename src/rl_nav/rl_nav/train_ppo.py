@@ -219,7 +219,7 @@ class Tb3Env(Node):
         twist.angular.z = float(w)
         self.cmd_pub.publish(twist)
         start_time = time.time()
-        while (time.time() - start_time) < int(self.step_time):
+        while (time.time() - start_time) < self.step_time:
             rclpy.spin_once(self, timeout_sec=0.01)
         self.episode_steps += 1
         observation = self.build_observation()
