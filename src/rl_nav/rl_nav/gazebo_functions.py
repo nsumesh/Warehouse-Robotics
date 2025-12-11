@@ -94,7 +94,6 @@ def docking_blue_box(node, client, task, x, y):
     if not os.path.exists(blue_box_path):
         blue_box_path = os.path.join(os.getcwd(), "gazebo_models", "blue_box", "model.sdf")
     if not os.path.exists(blue_box_path):
-        node.get_logger().error(f"Blue box model not found at: {blue_box_path}")
         return False
     with open(blue_box_path, "r") as f:
         xml = f.read()
