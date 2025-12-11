@@ -18,77 +18,62 @@ from gymnasium import spaces
 from stable_baselines3 import PPO
 import torch
 
-# Import constants and utilities
-from rl_nav.constants import (X_MIN, X_MAX, Y_MIN, Y_MAX, DOCK_A, DOCK_B, DOCK_C, PICKUP,SUCCESS_RADIUS, ACTIONS, MAX_RANGE, NUM_SCAN_BINS)
-from rl_nav.gazebo_utils import spawn_tb3, spawn_entity, delete_entity
-from rl_nav.item_utils import generate_item_sdf, get_item_color
-from rl_nav.navigation_utils import process_scan_to_bins
-from rl_nav.observation_utils import build_observation
-from rl_nav.reward_utils import (K_PROGRESS, K_TIME, K_COLLISION, K_SUCCESS, K_PICKUP_SUCCESS,K_CLOSE_ZONE, K_WRONG_DOCK, calculate_progress_reward,check_close_zone_bonus, check_dock_success)
+from rl_nav.constants import warehouse_x_limit_max, warehouse_x_limit_min, warehouse_y_limit_max, warehouse_y_limit_min, dockA, dockB, dockC, pickup, success_region, robot_actions, max_clamp_range, lidar_bins
+from rl_nav.gazebo_functions import robot_initilization, entity_spawned, delete_entity
+from rl_nav.box_functions import generate_item, get_item_color
+from rl_nav.navigation_functions import process_scan_to_bins
+from rl_nav.observation_functions import observation
+from rl_nav.reward_function import progress, time_penalty, collision_penalty, final_success_reward, pickup_reward, close_bonus, wrong_dock, progress_reward, close_zone_bonus, docking_success
 
 
 class Tb3Env(Node):
-
     def __init__(self, curriculum_stage=1):
         super().__init__("tb3_env")
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
         self.scan_sub = self.create_subscription(LaserScan, "/scan", self._on_scan, 10)
         self.odom_sub = self.create_subscription(Odometry, "/odom", self._on_odom, 10)
         self.reset_cli = self.create_client(SetEntityState, "/set_entity_state")
-
-        self.max_range = MAX_RANGE
-        self.num_scan_bins = NUM_SCAN_BINS
+        self.max_range = max_clamp_range
+        self.num_scan_bins = lidar_bins
         self.scan = None
         self.pose = np.zeros(3, dtype=np.float32)
         self.goal = np.array([0.0, 6.0], dtype=np.float32)
         self.collision = False
         self.min_obstacle_dist = self.max_range
-
-        self.prev_dist = None
-        self.episode_idx = 0
+        self.previous_dist = None
+        self.episode_index = 0
         self.episode_steps = 0
         self.cumulative_reward = 0.0
         self.step_time = 0.15
-        # Stage-specific max steps
         if curriculum_stage == 1:
-            self.max_steps = 200  # Short for local docking
+            self.max_steps = 200 
         elif curriculum_stage == 2:
-            self.max_steps = 400  # Longer for aisle navigation
-        else:  # Stage 3
-            self.max_steps = 600  # Increased for two-phase sorting (pickup + dropoff)
-
-        self.in_close_zone = False  # Track if in close zone for one-time bonus
-
-        self.actions = ACTIONS
+            self.max_steps = 400 
+        else: 
+            self.max_steps = 600 
+        self.in_close_zone = False 
+        self.actions = robot_actions
         self.recent_positions = deque(maxlen=10)
         self.curriculum_stage = curriculum_stage
-        self.task_class = None  # For Stage 3: 'A', 'B', or 'C'
+        self.task_class = None 
         self.metrics_path = None
-        
-        # For Stage 3: two-phase training (GO_PICKUP → GO_DROPOFF)
-        self.phase = None  # "GO_PICKUP" or "GO_DROPOFF" for Stage 3
-        self.pickup_goal = None  # Store pickup location
-        self.dropoff_goal = None  # Store dock location
-        self.pickup_reached = False  # Track if pickup was reached
-        self.pickup_reached_time = None  # Track when pickup was reached (for stability)
-        
-        # Item management for Stage 3
+        self.phase = None  
+        self.pickup_goal = None  
+        self.dropoff_goal = None  
+        self.pickup_reached = False  
+        self.pickup_reached_time = None 
         self.spawn_client = None
         self.delete_client = None
-        self.current_item_id = None  # Item ID for current task
-        self.item_counter = {'A': 0, 'B': 0, 'C': 0}  # Counter for unique IDs
+        self.current_item_id = None  
+        self.item_counter = {'A': 0, 'B': 0, 'C': 0} 
         if curriculum_stage == 3:
             self.spawn_client = self.create_client(SpawnEntity, "/spawn_entity")
             self.delete_client = self.create_client(DeleteEntity, "/delete_entity")
 
-    def _on_scan(self, msg: LaserScan):
-        """Process LiDAR scan into bins."""
-        self.scan, self.collision, self.min_obstacle_dist = process_scan_to_bins(
-            msg, self.num_scan_bins, self.max_range
-        )
+    def scan_into_bins(self, msg):
+        self.scan, self.collision, self.min_obstacle_dist = process_scan_to_bins(msg, self.num_scan_bins, self.max_range)
 
-    def _on_odom(self, msg: Odometry):
-        """Update robot pose [x, y, yaw]."""
+    def update_orientation(self, msg: Odometry):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         q = msg.pose.pose.orientation
@@ -96,392 +81,273 @@ class Tb3Env(Node):
         self.pose[:] = (x, y, yaw)
 
 
-    def _spawn_item_at_pickup(self, task_class):
-        """Spawn a single item at pickup point for the given task class."""
+    def pickup_item_spawning(self, task):
         if not self.spawn_client or not self.spawn_client.service_is_ready():
             return None
         
-        # Generate unique item ID
-        self.item_counter[task_class] += 1
-        item_id = f"item_{task_class}_{self.item_counter[task_class]}"
+        self.item_counter[task] += 1
+        item_id = "item_" + task + "_" + str(self.item_counter[task])
         
-        pickup_x, pickup_y = PICKUP
+        pickup_x, pickup_y = pickup
         
-        # Generate SDF for this item
-        color_rgba = get_item_color(task_class)
-        item_sdf = generate_item_sdf(item_id, color_rgba)
-        
-        # Spawn at pickup location (single item, centered)
-        item_z = 0.15  # Half of box height (0.3m box)
-        if spawn_entity(self, self.spawn_client, item_id, item_sdf, pickup_x, pickup_y, item_z):
-            self.get_logger().info(f"Spawned {item_id} at pickup ({pickup_x:.2f}, {pickup_y:.2f})")
+        color = get_item_color(task)
+        item_sdf = generate_item(item_id, color)
+        item_z = 0.15
+        if entity_spawned(self, self.spawn_client, item_id, item_sdf, pickup_x, pickup_y, item_z):
+            msg = "Spawned " + item_id + " at pickup (" + str(round(pickup_x, 2)) + ", " + str(round(pickup_y, 2)) + ")"
+            self.get_logger().info(msg)
             return item_id
         return None
 
-    def _cleanup_item(self, item_id):
-        """Delete an item from Gazebo."""
+    def delete_item(self, item_id):
         return delete_entity(self, self.delete_client, item_id)
 
-    def sample_start_and_goal(self):
-        """Sample start pose and goal based on curriculum stage."""
+    def start_and_goal(self):
         if self.curriculum_stage == 1:
-            # Stage 1: Short local docking near DOCK_A
-            # Start close to DOCK_A, goal is DOCK_A
-            dock_x, dock_y = DOCK_A
+            dock_x, dock_y = dockA
             sx = dock_x + random.uniform(-0.5, 0.5)
             sy = dock_y + random.uniform(-0.5, 0.5)
-            # Ensure within workspace
-            sx = max(X_MIN, min(X_MAX, sx))
-            sy = max(Y_MIN, min(Y_MAX, sy))
+            sx = max(warehouse_x_limit_min, min(warehouse_x_limit_max, sx))
+            sy = max(warehouse_x_limit_min, min(warehouse_y_limit_max, sy))
             yaw = random.uniform(-math.pi, math.pi)
-            gx, gy = DOCK_A
-            self.task_class = None
+            gx, gy = dockA
+            self.task = None
             return (sx, sy, yaw), (gx, gy)
-
         elif self.curriculum_stage == 2:
-            # Stage 2: Longer aisle navigation to DOCK_A
-            # Start sampled in workspace, goal is DOCK_A
-            sx = random.uniform(X_MIN, X_MAX)
-            sy = random.uniform(Y_MIN, Y_MAX)
+            sx = random.uniform(warehouse_x_limit_min, warehouse_x_limit_max)
+            sy = random.uniform(warehouse_y_limit_min, warehouse_y_limit_max)
             yaw = random.uniform(-math.pi, math.pi)
-            gx, gy = DOCK_A
-            self.task_class = None
+            gx, gy = dockA
+            self.task = None
             return (sx, sy, yaw), (gx, gy)
+        sx = random.uniform(warehouse_x_limit_min, warehouse_x_limit_max)
+        sy = random.uniform(warehouse_y_limit_min, warehouse_y_limit_max)
+        yaw = random.uniform(-math.pi, math.pi)
+        self.task = random.choice(['A', 'B', 'C'])
+        if self.task == 'A':
+            dock_x, dock_y = dockA
+        elif self.task_class == 'B':
+            dock_x, dock_y = dockB
+        else: 
+            dock_x, dock_y = dockC
+        self.pickup_goal = pickup
+        self.dropoff_goal = (dock_x, dock_y)
+        self.phase = "pickup"
+        self.pickup_reached = False
+        self.pickup_reached_time = None
+        gx, gy = pickup
+        return (sx, sy, yaw), (gx, gy)
 
-        else:  # Stage 3
-            # Stage 3: Two-phase virtual sorting (PICKUP → DOCK)
-            # Phase 1: Navigate to PICKUP (with items)
-            # Phase 2: Navigate to correct dock after pickup
-            sx = random.uniform(X_MIN, X_MAX)
-            sy = random.uniform(Y_MIN, Y_MAX)
-            yaw = random.uniform(-math.pi, math.pi)
-            # Randomly choose task class A, B, or C
-            self.task_class = random.choice(['A', 'B', 'C'])
-            # Determine dock location based on task class
-            if self.task_class == 'A':
-                dock_x, dock_y = DOCK_A
-            elif self.task_class == 'B':
-                dock_x, dock_y = DOCK_B
-            else:  # 'C'
-                dock_x, dock_y = DOCK_C
-            
-            # Store both goals for two-phase training
-            self.pickup_goal = PICKUP
-            self.dropoff_goal = (dock_x, dock_y)
-            self.phase = "GO_PICKUP"
-            self.pickup_reached = False
-            self.pickup_reached_time = None
-            
-            # Initial goal is PICKUP (phase 1)
-            gx, gy = PICKUP
-            return (sx, sy, yaw), (gx, gy)
-
-    def _obs(self):
-        """Build 30-dim observation: 24 scan bins + [dx, dy, yaw] + [task_class one-hot]."""
+    def build_observation(self):
         if self.scan is None:
             scan = np.ones(self.num_scan_bins, dtype=np.float32)
         else:
             scan = self.scan
-        
-        # Use observation utility for consistent encoding
-        task_class_for_obs = self.task_class if (self.curriculum_stage == 3 and self.phase == "GO_DROPOFF") else None
-        return build_observation(scan, self.pose, self.goal, task_class_for_obs, self.phase)
+        if (self.curriculum_stage == 3 and self.phase == "GO_DROPOFF"):
+            task_class = self.task
+        else:
+            task_class = None
+        return observation(scan, self.pose, self.goal, task_class, self.phase)
 
     def reset(self):
-        """Reset environment for new episode."""
-        if self.episode_steps > 0 and self.prev_dist is not None:
-            final_dist = float(np.linalg.norm(self.goal - self.pose[:2]))
-            success = int(final_dist < SUCCESS_RADIUS and not self.collision)
-
-            # Log metrics
+        if self.episode_steps > 0 and self.previous_dist is not None:
+            x = self.goal[0]-self.pose[0]
+            y = self.goal[1]-self.pose[1]
+            final_distance = float(math.hypot(x,y))
+            success_val = int(final_distance<success_region and not self.collision)
             if self.metrics_path is None:
                 self.metrics_path = os.path.join("ppo_runs", "episode_metrics.csv")
-            os.makedirs(os.path.dirname(self.metrics_path), exist_ok=True)
+            directory = os.path.dirname(self.metrics_path)
+            os.makedirs(directory, exist_ok=True)
+            line = str(self.episode_index) + "," + str(self.curriculum_stage) + "," + str(self.episode_steps) + "," + format(final_distance, ".3f") + "," + str(success_val) + "," + format(self.cumulative_reward, ".3f") + "\n"
             with open(self.metrics_path, "a") as f:
-                f.write(f"{self.episode_idx},{self.curriculum_stage},{self.episode_steps},"
-                        f"{final_dist:.3f},{success},{self.cumulative_reward:.3f}\n")
+                f.write(line)
+            if self.task is None:
+                task_info = ""
+            else:
+                task_info = "task="+ str(self.task)
+            message = ("[EP " + str(self.episode_index) + "] " + "stage=" + str(self.curriculum_stage) + " " + task_info + " steps=" + str(self.episode_steps) + " dist=" + format(final_distance, ".2f") + "m" + " success=" + str(success_val) + " return=" + format(self.cumulative_reward, ".2f"))
+            self.get_logger().info(message)
 
-            task_info = f"task={self.task_class}" if self.task_class else ""
-            self.get_logger().info(f"[EP {self.episode_idx}] stage={self.curriculum_stage} {task_info} "
-                                  f"steps={self.episode_steps} dist={final_dist:.2f}m "
-                                  f"success={success} return={self.cumulative_reward:.2f}")
-
-        # Clean up items from previous episode (Stage 3 only)
         if self.curriculum_stage == 3 and self.current_item_id:
-            self._cleanup_item(self.current_item_id)
+            self.delete_item(self.current_item_id)
             self.current_item_id = None
         
-        # Reset counters
-        self.episode_idx += 1
+        self.episode_index += 1
         self.episode_steps = 0
         self.cumulative_reward = 0.0
         self.collision = False
         self.min_obstacle_dist = self.max_range
         self.recent_positions.clear()
         
-        # Reset phase tracking for Stage 3
         if self.curriculum_stage == 3:
             self.pickup_reached = False
             self.pickup_reached_time = None
 
-        # Sample new start/goal using curriculum stage
-        (sx, sy, syaw), (gx, gy) = self.sample_start_and_goal()
+        (sx, sy, syaw), (gx, gy) = self.start_and_goal()
         self.goal[:] = (gx, gy)
         
-        # For Stage 3: spawn item at pickup
         if self.curriculum_stage == 3 and self.task_class:
-            # Wait a bit for services to be ready
             if self.spawn_client:
                 self.spawn_client.wait_for_service(timeout_sec=2.0)
-            self.current_item_id = self._spawn_item_at_pickup(self.task_class)
+            self.current_item_id = self.pickup_item_spawning(self.task_class)
 
-        # Teleport robot
         if self.reset_cli.wait_for_service(timeout_sec=5.0):
-            req = SetEntityState.Request()
-            req.state = EntityState()
-            req.state.name = "tb3"
-            req.state.pose.position.x = float(sx)
-            req.state.pose.position.y = float(sy)
-            req.state.pose.position.z = 0.01
-            cy, syq = math.cos(syaw / 2.0), math.sin(syaw / 2.0)
-            req.state.pose.orientation.z = syq
-            req.state.pose.orientation.w = cy
-            self.reset_cli.call_async(req)
+            request = SetEntityState.Request()
+            request.state = EntityState()
+            request.state.name = "tb3"
+            request.state.pose.position.x = float(sx)
+            request.state.pose.position.y = float(sy)
+            request.state.pose.position.z = 0.01
+            cy = math.cos(syaw / 2.0)
+            syq = math.sin(syaw / 2.0)
+            request.state.pose.orientation.z = math.sin(syaw/2.0)
+            request.state.pose.orientation.w = math.cos(syaw/2.0)
+            self.reset_cli.call_async(request)
 
-        # Wait for sensors
-        t0 = time.time()
+        start_time = time.time()
         self.scan = None
-        while (self.scan is None) and (time.time() - t0 < 2.0):
+        while (self.scan is None) and (time.time() - start_time < 2.0):
             rclpy.spin_once(self, timeout_sec=0.05)
+        x,y = self.goal[0]-self.pose[0], self.goal[1]-self.pose[1]
+        self.prev_dist = float(math.hypot(x,y))
+        self.in_close_zone = False  
+        return self.build_observation()
 
-        self.prev_dist = float(np.linalg.norm(self.goal - self.pose[:2]))
-        self.in_close_zone = False  # Reset close zone flag
-        return self._obs()
-
-    def step(self, a_idx: int):
-        """Execute action and compute simplified reward."""
-        v, w = self.actions[int(a_idx)]
+    def step(self, action):
+        v, w = self.actions[int(action)]
         twist = Twist()
         twist.linear.x = float(v)
         twist.angular.z = float(w)
         self.cmd_pub.publish(twist)
-
-        end_time = self.get_clock().now().nanoseconds + int(self.step_time * 1e9)
-        while self.get_clock().now().nanoseconds < end_time:
+        start = self.get_clock().now()
+        while (self.get_clock.now() - start) < int(self.step_time):
             rclpy.spin_once(self, timeout_sec=0.01)
-
         self.episode_steps += 1
-        obs = self._obs()
-        dx, dy = (self.goal - self.pose[:2])
-        dist = float(math.hypot(dx, dy))
-
-        # Progress reward
-        r = calculate_progress_reward(self.prev_dist, dist, K_PROGRESS)
-        self.prev_dist = dist
-        r -= K_TIME  # Time penalty every step
-
-        # Intermediate bonus for getting close to goal (one-time when entering)
-        bonus, self.in_close_zone = check_close_zone_bonus(dist, self.in_close_zone, K_CLOSE_ZONE)
-        r += bonus
-
+        observation = self.build_observation()
+        x, y = (self.goal - self.pose[:2])
+        current_distance = float(math.hypot(x, y))
+        reward = progress_reward(self.previous_dist, current_distance, progress)
+        self.previous_dist = current_distance
+        reward-=time_penalty
+        bonus, self.in_close_zone = close_zone_bonus(current_distance, self.in_close_zone, close_bonus)
+        reward += close_bonus
         done = False
         success = False
-
-        # Collision penalty
         if self.collision:
-            r -= K_COLLISION
+            reward -= collision_penalty
             done = True
-
-        # For Stage 3: Handle two-phase training (PICKUP → DOCK)
         if self.curriculum_stage == 3 and self.task_class and not done:
-            if self.phase == "GO_PICKUP":
-                # Phase 1: Check if reached PICKUP
-                dist_to_pickup = math.hypot(self.pose[0] - PICKUP[0], self.pose[1] - PICKUP[1])
-                if dist_to_pickup < SUCCESS_RADIUS and not self.collision:
-                    # Check stability (been close for at least 1 second)
-                    now = time.time()
+            if self.phase == "pickup":
+                pickup_distance = math.hypot(self.pose[0] - pickup[0], self.pose[1] - pickup[1])
+                if pickup_distance < success_region and not self.collision:
+                    curr_time = time.time()
                     if self.pickup_reached_time is None:
-                        self.pickup_reached_time = now
-                    elif now - self.pickup_reached_time >= 1.0:  # Stable for 1 second
-                        # Reached pickup: transition to phase 2
-                        r += K_PICKUP_SUCCESS  # Reward for reaching pickup
-                        self.phase = "GO_DROPOFF"
+                        self.pickup_reached_time = curr_time
+                    elif curr_time - self.pickup_reached_time >= 1.0: 
+                        reward += pickup_reward 
+                        self.phase = "dropoff"
                         self.pickup_reached = True
-                        # Switch goal to dock
                         self.goal[:] = self.dropoff_goal
-                        # Delete item (virtual pickup)
                         if self.current_item_id:
-                            self._cleanup_item(self.current_item_id)
-                        # Reset distance tracking for new phase
-                        self.prev_dist = float(np.linalg.norm(self.goal - self.pose[:2]))
+                            self.delete_item(self.current_item_id)
+                        goal_x, goal_y = self.goal[0] - self.pose[0], self.goal[1]-self.pose[1]
+                        self.previous_dist = float(math.hypot(goal_x, goal_y))
                         self.in_close_zone = False
                         self.pickup_reached_time = None
-                    # Don't set done=True - continue to phase 2
                 else:
-                    # Reset timer if not close anymore
-                    if dist_to_pickup >= SUCCESS_RADIUS:
+                    if pickup_distance >= success_region:
                         self.pickup_reached_time = None
-            
-            elif self.phase == "GO_DROPOFF":
-                # Phase 2: Check if reached correct dock
-                if dist < SUCCESS_RADIUS and not self.collision:
-                    dock_success, wrong_dock, _ = check_dock_success(self.pose, self.task_class, SUCCESS_RADIUS)
+            elif self.phase == "dropoff":
+                if current_distance < success_region and not self.collision:
+                    dock_success, wrong_dock, dock_id = docking_success(self.pose, self.task_class, success_region)
                     if dock_success:
-                        # Correct dock - full success!
-                        r += K_SUCCESS
+                        reward += final_success_reward
                         success = True
                         done = True
                     elif wrong_dock:
-                        # Wrong dock - penalty
-                        r -= K_WRONG_DOCK
+                        reward-= wrong_dock
                         done = True
-        
-        # For Stage 1/2: standard success check
-        elif dist < SUCCESS_RADIUS and not self.collision and not done:
-            r += K_SUCCESS
+        elif current_distance < success_region and not self.collision and not done:
+            reward+=final_success_reward
             success = True
             done = True
-
-        # Timeout
         if self.episode_steps >= self.max_steps:
             done = True
+        self.cumulative_reward += reward
+        current_status = {"Distance to Goal": current_distance,"Stage": self.curriculum_stage,"Episode Steps": self.episode_steps,"Success (Binary)": success,"Task type": self.task_class,}
+        return observation, reward, done, current_status
 
-        self.cumulative_reward += r
-
-        info = {
-            "distance_to_goal": dist,
-            "curriculum_stage": self.curriculum_stage,
-            "episode_steps": self.episode_steps,
-            "success": success,
-            "task_class": self.task_class,
-        }
-        return obs, r, done, info
-
-
-class GymTb3(gym.Env):
-    """Gymnasium wrapper for Stable-Baselines3."""
+class GymEnvironment(gym.Env):
     metadata = {"render_modes": []}
-
-    def __init__(self, node: Tb3Env):
+    def __init__(self, node):
         super().__init__()
         self.node = node
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(30,), dtype=np.float32)
         self.action_space = spaces.Discrete(len(self.node.actions))
 
     def reset(self, *, seed=None, options=None):
-        if seed is not None:
-            random.seed(seed)
-            np.random.seed(seed)
-        obs = self.node.reset()
-        return obs, {}
+        observation = self.node.reset()
+        return observation, {}
 
     def step(self, action):
-        obs, reward, done, info = self.node.step(int(action))
+        observation, reward, done, current_status = self.node.step(int(action))
         terminated = done
         truncated = (self.node.episode_steps >= self.node.max_steps and not terminated)
-        return obs, reward, terminated, truncated, info
-
+        return observation, reward, terminated, truncated, current_status
 
 def main():
-    """
-    Train PPO policy for simplified warehouse navigation with virtual sorting.
-    
-    Example commands:
-    # Stage 1: Short local docking
-    ros2 run rl_nav train_ppo --timesteps 20000 --curriculum-stage 1
-    
-    # Stage 2: Longer aisle navigation
-    ros2 run rl_nav train_ppo --timesteps 80000 --curriculum-stage 2
-    
-    # Stage 3: Two-phase virtual sorting (PICKUP → DOCK) with items
-    ros2 run rl_nav train_ppo --timesteps 300000 --curriculum-stage 3
-    
-    # With seed for reproducibility (recommended: 300k timesteps)
-    ros2 run rl_nav train_ppo --timesteps 300000 --curriculum-stage 3 --seed 0
-    """
     import argparse
-
-    parser = argparse.ArgumentParser(description="Train PPO policy for TurtleBot3 navigation with virtual sorting")
-    parser.add_argument("--timesteps", type=int, default=20000, help="Total timesteps to train")
-    parser.add_argument("--logdir", type=str, default="ppo_runs",
-                        help="Directory for logs and models (default: ppo_runs)")
-    parser.add_argument("--resume", type=str, default=None,
-                        help="Path to checkpoint to resume from")
-    parser.add_argument("--curriculum-stage", type=int, default=1, choices=[1, 2, 3],
-                        help="Curriculum stage: 1=local docking, 2=aisle nav, 3=virtual sorting")
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Random seed for reproducibility")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timesteps", type=int, default=20000)
+    parser.add_argument("--logdir", type=str, default="ppo_runs")
+    parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--curriculum-stage", type=int, default=1, choices=[1, 2, 3])
     args = parser.parse_args()
-
     rclpy.init()
-    if not os.path.isabs(args.logdir):
-        args.logdir = os.path.abspath(args.logdir)
+    log_dir = os.path.abspath(args.logdir)
     os.makedirs(args.logdir, exist_ok=True)
-    
-    # Set seed if provided
-    if args.seed is not None:
-        random.seed(args.seed)
-        np.random.seed(args.seed)
-        torch.manual_seed(args.seed)
-
-    # Create environment with curriculum stage
     node = Tb3Env(curriculum_stage=args.curriculum_stage)
     node.metrics_path = os.path.join(args.logdir, "episode_metrics.csv")
     if not os.path.exists(node.metrics_path):
         with open(node.metrics_path, "w") as f:
             f.write("episode,stage,steps,final_dist,success,return\n")
-    
-    node.get_logger().info(f"Training with curriculum stage {args.curriculum_stage}")
+    node.get_logger().info(f"Training of stage" +str(args.curriculum_stage))
 
-    if not spawn_tb3(node):
-        node.get_logger().error("TB3 spawn failed")
+    if not robot_initilization(node):
+        node.get_logger().error("Waffle Pi initialization failed")
         rclpy.shutdown()
         return
-
-    env = GymTb3(node)
-
+    environment = GymEnvironment(node)
+    model = None
     if args.resume:
-        if not os.path.isabs(args.resume):
-            resume_path = os.path.join(args.logdir, args.resume)
-            if not os.path.exists(resume_path):
-                resume_path = os.path.abspath(args.resume)
+        if os.path.isabs(args.resume):
+            resume_path = args.resume
         else:
-            resume_path = os.path.expanduser(args.resume)
-        
+            resume_path = os.path.join(log_dir, args.resume)
+        resume_path = os.path.expanduser(resume_path)
         if os.path.exists(resume_path):
-            node.get_logger().info(f"Loading checkpoint: {resume_path}")
-            model = PPO.load(resume_path, env=env)
+            node.get_logger().info("Resuming from checkpoint: " + resume_path)
+            model = PPO.load(resume_path, env=environment)
         else:
-            node.get_logger().warn(f"Checkpoint not found: {resume_path}. Starting fresh.")
-            args.resume = None
+            node.get_logger().warn("Checkpoint not found: " + resume_path)
+            node.get_logger().warn("Training will start fresh.")
 
-    if not args.resume:
-        model = PPO(
-            "MlpPolicy", env, verbose=1, tensorboard_log=args.logdir,
-            n_steps=256, batch_size=64, n_epochs=10, learning_rate=3e-4,
-            gamma=0.99, gae_lambda=0.95, clip_range=0.2, ent_coef=0.01,
-            vf_coef=0.5, max_grad_norm=0.5,
-            policy_kwargs=dict(net_arch=[64, 64], activation_fn=torch.nn.Tanh),
-            seed=args.seed,
-        )
-        node.get_logger().info("Starting fresh training")
+    if model is None:
+        model = PPO("MlpPolicy", environment, verbose=1, tensorboard_log=args.logdir,n_steps=256, batch_size=64, n_epochs=10, learning_rate=3e-4,gamma=0.99, gae_lambda=0.95, clip_range=0.2, ent_coef=0.01,vf_coef=0.5, max_grad_norm=0.5,policy_kwargs=dict(net_arch=[64, 64], activation_fn=torch.nn.Tanh),)
+        node.get_logger().info("New training starting")
 
     model.learn(total_timesteps=args.timesteps)
-
-    # Save model with stage-specific name
     if args.curriculum_stage == 1:
         model_name = "ppo_stage1.zip"
     elif args.curriculum_stage == 2:
         model_name = "ppo_stage2.zip"
-    else:  # Stage 3
+    else: 
         model_name = "ppo_stage3_sorting.zip"
-    
-    out = os.path.join(args.logdir, model_name)
-    model.save(out)
-    node.get_logger().info(f"Saved policy to {out}")
-    print(f"Saved policy to {out}")
+    model_path = os.path.join(log_dir, model_name)
+    model.save(model_path)
+    node.get_logger().info("Polict saved to "+model_path)
+    print("Policy saved to "+model_path)
     rclpy.shutdown()
-
-
 if __name__ == "__main__":
     main()
