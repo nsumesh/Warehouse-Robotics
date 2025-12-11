@@ -7,9 +7,9 @@ class FSM:
         self.states = {'idle': self.idle_state, 'pickup': self.pickup_state, 'dropoff': self.dropoff_state, 'docking': self.docking_state}
     
     def move(self):
-        self.node.cleaup_dropped_items()
+        self.node.cleanup_dropped_items()
         self.handle_collisions()
-        self.task_timeout()
+        self.timeout()
         state = self.states.get(self.node.phase)
         if state:
             state(time.time())
@@ -31,7 +31,7 @@ class FSM:
             if node.last_collision_time is None:
                 node.last_collision_time = curr
             elif curr-node.last_collision_time>3.0:
-                node.get_logger.warn("Resetting position due to collision")
+                node.get_logger().warn("Resetting position due to collision")
                 node.reset_robot_position()
                 node.task_start_time = curr
                 node.last_collision_time = None
@@ -78,7 +78,7 @@ class FSM:
                 node.item_counter[node.current_task]+=1
                 item_id = "item_" + str(node.current_task) + "_" + str(node.item_counter[node.current_task])
             node.current_item_id = item_id
-            node.virtual_pickup(item_id. node.task)
+            node.virtual_pickup(item_id, node.task)
             x,y = node.current_goal
             node.get_logger.info("Picked up "+item_id)
     
