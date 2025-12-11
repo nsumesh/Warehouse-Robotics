@@ -19,7 +19,7 @@ def detect_blue_marker(frame):
         return {'detected': False,'area': 0,'centroid_x': 0,'error_x': 0,'centered': False}
 
 def process_camera_image(bridge, msg, phase):
-    if phase != "final_dock":
+    if phase != "docking":
         return None
     try:
         frame = bridge.imgmsg_to_cv2(msg, "bgr8")
@@ -28,6 +28,7 @@ def process_camera_image(bridge, msg, phase):
         return {'error': str(e)}
 
 def docking_complete(marker_area, marker_centered, stable_time, required_duration=None):
+    stable_duration = required_duration
     if required_duration is None:
         stable_duration = docking_success_duration
     close = marker_area > final_docking_threshold

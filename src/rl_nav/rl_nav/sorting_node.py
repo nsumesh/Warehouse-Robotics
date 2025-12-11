@@ -150,7 +150,7 @@ class SortingNode(Node):
 
     def tasks(self, num_tasks):
         categories = ['A', 'B', 'C']
-        self.task_queue = ['B','C']
+        self.task_queue = ['A','B','C']
         for task in categories:
             self.items_at_pickup[task] = []
         for task in self.task_queue:

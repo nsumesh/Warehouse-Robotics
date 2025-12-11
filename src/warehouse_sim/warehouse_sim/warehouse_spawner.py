@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Warehouse World Generator with Pickable Objects - ROS 2 Version
-Creates an empty warehouse and spawns various pickable boxes at different heights
-"""
-
 import rclpy
 from rclpy.node import Node
 from gazebo_msgs.srv import SpawnEntity, DeleteEntity
