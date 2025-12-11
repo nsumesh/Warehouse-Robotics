@@ -36,7 +36,13 @@ from rl_nav.fsm import FSM
 class SortingNode(Node):
     def __init__(self):
         super().__init__("sorting_node")
-        model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ppo_runs", "ppo_stage3_sorting.zip")
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        model_path = os.path.join(project_root, "ppo_runs", "ppo_stage3_sorting.zip")
+        if not os.path.exists(model_path):
+            model_path = os.path.join(os.getcwd(), "ppo_runs", "ppo_stage3_sorting.zip")
+        if not os.path.exists(model_path):
+            self.get_logger().error("Model file not found")
+            raise FileNotFoundError("PPO model not found")
         self.fsm = FSM(self)        
         self.task_timer = self.create_timer(0.5, self.fsm.move)
         self.model = PPO.load(model_path)
