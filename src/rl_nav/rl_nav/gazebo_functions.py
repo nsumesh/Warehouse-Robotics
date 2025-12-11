@@ -89,15 +89,17 @@ def reset_robot_position(node, x = None, y= None, z= 0.1):
 
 def docking_blue_box(node, client, task, x, y):
     current_file = os.path.abspath(__file__)
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
-
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
     blue_box_path = os.path.join(project_root, "gazebo_models", "blue_box", "model.sdf")
+    if not os.path.exists(blue_box_path):
+        blue_box_path = os.path.join(os.getcwd(), "gazebo_models", "blue_box", "model.sdf")
+    if not os.path.exists(blue_box_path):
+        node.get_logger().error(f"Blue box model not found at: {blue_box_path}")
+        return False
     with open(blue_box_path, "r") as f:
         xml = f.read()
-    
     marker_name = "docking_marker_" + task
     return entity_spawned(node, client, marker_name, xml, x, y, 0.05, 0.0)
-
 
 def delete_blue_box(node, client, task):
     marker_name = "docking_marker_" + task
