@@ -28,7 +28,7 @@ from rl_nav.constants import dockA, dockB, dockC, pickup, success_region, sucess
 from rl_nav.gazebo_functions import robot_initilization, entity_spawned, delete_entity, reset_robot_position, docking_blue_box, delete_blue_box
 from rl_nav.box_functions import generate_item, get_item_color
 from rl_nav.navigation_functions import euclidean_distance, goal_reached, check_collision, process_scan_to_bins
-from rl_nav.rl_nav.docking_functions import process_camera_image, docking_complete, docking_control
+from rl_nav.docking_functions import process_camera_image, docking_complete, docking_control
 from rl_nav.observation_functions import observation
 from rl_nav.fsm import FSM
 
@@ -86,14 +86,14 @@ class SortingNode(Node):
         self.docking_start_time = None
         self.docking_transition_distance = docking_fsm_distance
         self.tasks(5)
-        self.control_timer = self.create_timer(0.15, self.control_step)
+        self.control_timer = self.create_timer(0.15, self.step)
         self.get_logger().info(f"SortingNode initialized. Task queue: {self.task_queue}")
 
     def scan_for_bins(self, msg):
         self.scan, _, _ = process_scan_to_bins(msg, 24, 3.5)
 
     def update_pose(self, msg):
-        position = msg.pose.position
+        position = msg.pose.pose.position
         orientation = msg.pose.pose.orientation
         yaw = math.atan2(2.0 * (orientation.w * orientation.z + orientation.x * orientation.y), 1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z))
         self.pose[:] = (position.x, position.y, yaw)
@@ -104,7 +104,7 @@ class SortingNode(Node):
                 self.blue_marker_detected = False
                 self.blue_marker_area = 0
                 self.blue_marker_centered = False
-                self.blue_marker_error = 0
+                self.blue_marker_error_x = 0
                 self.docking_complete = False
                 self.docking_stable_time = None
             return
@@ -122,7 +122,7 @@ class SortingNode(Node):
     
         self.blue_marker_detected = result['detected']
         self.blue_marker_area = result['area']
-        self.blue_marker_error_x = result['error']
+        self.blue_marker_error_x = result['error_x']
         self.blue_marker_centered = result['centered']
         
         if self.blue_marker_detected:
@@ -150,17 +150,12 @@ class SortingNode(Node):
         for task in self.task_queue:
             self.item_counter[task] = self.item_counter.get(task, 0) + 1
             item_id = "item_" + task +"_"+str(self.item_counter[task])
-            self.items_at_pickup.append(item_id)
+            self.items_at_pickup[task].append(item_id)
             self.active_items[item_id] = {'task': task, 'spawned':False, 'picked':False}
 
     def goal_distance(self):
         return euclidean_distance(self.pose, self.current_goal)
-
-    def goal_reached(self):
-        is_reached, new_time = goal_reached(self.pose, self.current_goal, self.goal_reached_threshold,self.goal_region, 3.0)
-        self._goal_reached_time = new_time
-        return is_reached
-
+    
     def goal_reached_check(self):
         reached, new_time = goal_reached(self.pose, self.current_goal, self.goal_region, self.goal_reached_time, 3.0)
         self.goal_reached_time = new_time
@@ -206,7 +201,7 @@ class SortingNode(Node):
             self.get_logger().info("Picked up item")
             return True
         else:
-            self.get_logger.info("Picked up item")
+            self.get_logger().info("Picked up item")
             return True 
 
     def virtual_dropoff(self, task, item_id):
@@ -245,7 +240,7 @@ class SortingNode(Node):
             if diff>=2.5:
                 delete = delete_entity(self, self.delete_client, item_id)
                 if delete:
-                    self.get_logger.debug("Cleaned up item")
+                    self.get_logger().debug("Cleaned up item")
                 if item_id in self.dropped_items:
                     del self.dropped_items[item_id]
  
@@ -260,7 +255,7 @@ class SortingNode(Node):
         self.blue_marker_detected = False
         self.blue_marker_area = 0
         self.blue_marker_centered = False
-        self.blue_marker_error = 0
+        self.blue_marker_error_x = 0
         self.docking_stable_time = None
         self.item_dropped_for_current_task = False 
         
@@ -286,7 +281,7 @@ class SortingNode(Node):
             self.phase = "dropoff"
             self.task = self.current_task
             self.current_goal = self.drop_docks[self.task]
-            self._goal_reached_time = None  
+            self.goal_reached_time = None  
             self.task_start_time = time.time()
         elif self.phase == "dropoff":
             self.current_task = None
@@ -301,35 +296,28 @@ class SortingNode(Node):
     def step(self):
         if self.phase == "docking":
             msg = Twist()
-            linear, angular = docking_control(self.blue_marker_detected, self.blue_marker_error)
+            linear, angular = docking_control(self.blue_marker_detected, self.blue_marker_error_x)
             msg.linear.x = linear
             msg.angular.z = angular
             self.cmd_pub.publish(msg)
             return
-        
         if self.current_goal is None:
             msg = Twist()
             self.cmd_pub.publish(msg)
             return
-
         observation = self.build_observation()
         if observation is None:
             if self.scan is None:
                 self.get_logger().warn("Waiting for LiDAR scan...")
             return
-
         action, _ = self.model.predict(observation, deterministic=True)
         v, w = self.actions[int(action)]
-        
         if self.last_log_time is not None:
-            if time.time() - self._last_log_time > 5.0:
-                dist = self._distance_to_goal()
-                self.get_logger().info(f"[Control] phase={self.phase} goal={self.current_goal} "
-                                     f"dist={dist:.2f}m task_class={self.task_class}")
+            if time.time() - self.last_log_time > 5.0:
+                distance = self.goal_distance()
                 self.last_log_time = time.time()
         else:
-            self.last_log_time = time.time()
-        
+            self.last_log_time = time.time() 
         msg = Twist()
         msg.linear.x = float(v)
         msg.angular.z = float(w)

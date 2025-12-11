@@ -9,7 +9,7 @@ class FSM:
     def move(self):
         self.node.cleanup_dropped_items()
         self.handle_collisions()
-        self.timeout()
+        self.timeout(time.time())
         state = self.states.get(self.node.phase)
         if state:
             state(time.time())
@@ -55,9 +55,9 @@ class FSM:
         node.goal_reached_time = None
         node.task = None
         node.items_spawned_for_current_task = False
-        node.items_dropped_for_current_task = False
+        node.item_dropped_for_current_task = False
         pickup_x, pickup_y = node.pickup_location
-        node.get_logger.info("Going to pickup for task "+str(node.current_task))
+        node.get_logger().info("Going to pickup for task "+str(node.current_task))
     
     def pickup_state(self, curr):
         node = self.node
@@ -80,7 +80,7 @@ class FSM:
             node.current_item_id = item_id
             node.virtual_pickup(item_id, node.task)
             x,y = node.current_goal
-            node.get_logger.info("Picked up "+item_id)
+            node.get_logger().info("Picked up "+item_id)
     
     def dropoff_state(self, curr):
         node = self.node
@@ -103,7 +103,7 @@ class FSM:
     def docking_state(self, curr):
         node = self.node
         if node.docking_complete:
-            node.get_logger.info("Final docking complete after all tasks complete")
+            node.get_logger().info("Final docking complete after all tasks complete")
             node.delete_dock_box()
             node.reset_task_state()
             return
