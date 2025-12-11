@@ -3,7 +3,6 @@ import math
 import time
 import random
 from collections import deque
-
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -24,7 +23,6 @@ from rl_nav.box_functions import generate_item, get_item_color
 from rl_nav.navigation_functions import process_scan_to_bins
 from rl_nav.observation_functions import observation
 from rl_nav.reward_function import progress, time_penalty, collision_penalty, final_success_reward, pickup_reward, close_bonus, wrong_dock, progress_reward, close_zone_bonus, docking_success
-
 
 class Tb3Env(Node):
     def __init__(self, curriculum_stage=1):
@@ -55,7 +53,7 @@ class Tb3Env(Node):
         self.actions = robot_actions
         self.recent_positions = deque(maxlen=10)
         self.curriculum_stage = curriculum_stage
-        self.task_class = None 
+        self.task = None 
         self.metrics_path = None
         self.phase = None  
         self.pickup_goal = None  
@@ -220,8 +218,8 @@ class Tb3Env(Node):
         twist.linear.x = float(v)
         twist.angular.z = float(w)
         self.cmd_pub.publish(twist)
-        start = self.get_clock().now()
-        while (self.get_clock.now() - start) < int(self.step_time):
+        start_time = time.time()
+        while (time.time() - start_time) < int(self.step_time):
             rclpy.spin_once(self, timeout_sec=0.01)
         self.episode_steps += 1
         observation = self.build_observation()
