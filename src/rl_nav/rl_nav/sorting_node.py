@@ -330,7 +330,7 @@ class SortingNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = SortingNode()
-    if robot_initilization(node)==False:
+    if robot_initilization(node, spawn_x=0.0, spawn_y=0.0)==False:
         node.get_logger().error("TB3 spawn failed - make sure Gazebo is running")
         node.get_logger().error("Launch Gazebo first: ./launch_warehouse.sh")
         node.destroy_node()

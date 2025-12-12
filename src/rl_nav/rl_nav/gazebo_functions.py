@@ -8,7 +8,7 @@ from gazebo_msgs.msg import EntityState
 from rl_nav.constants import warehouse_x_limit_min, warehouse_x_limit_max, warehouse_y_limit_min, warehouse_y_limit_max
 
 
-def robot_initilization(node):
+def robot_initilization(node, spawn_x=None, spawn_y=None):
     robot_path = os.path.expanduser("~/turtlebot3_ws/install/turtlebot3_gazebo/share/" "turtlebot3_gazebo/models/turtlebot3_waffle_pi/model.sdf")
     if not os.path.exists(robot_path):
         node.get_logger().error("WafflePi cannot be found")
@@ -16,17 +16,33 @@ def robot_initilization(node):
     with open(robot_path, "r") as f:
         xml = f.read()
     service = node.create_client(SpawnEntity, "/spawn_entity")
+    if not service.wait_for_service(timeout_sec=5.0):
+        node.get_logger().error("Spawn entity service not available")
+        return False
     request = SpawnEntity.Request()
     request.name = "tb3"
     request.xml = xml
     request.robot_namespace = ""
     request.reference_frame = "world"
-    request.initial_pose.position.x = (warehouse_x_limit_max + warehouse_x_limit_min) / 2.0
-    request.initial_pose.position.y = (warehouse_y_limit_min + warehouse_x_limit_max) / 2.0
+    if spawn_x is None:
+        request.initial_pose.position.x = (warehouse_x_limit_max + warehouse_x_limit_min) / 2.0
+    else:
+        request.initial_pose.position.x = float(spawn_x)
+    if spawn_y is None:
+        request.initial_pose.position.y = (warehouse_y_limit_min + warehouse_x_limit_max) / 2.0
+    else:
+        request.initial_pose.position.y = float(spawn_y)
     request.initial_pose.position.z = 0.01
     request.initial_pose.orientation.w = 1.0
     future = service.call_async(request)
-    rclpy.spin_until_future_complete(node, future)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+    if not future.done():
+        node.get_logger().error("Spawn request timed out")
+        return False
+    result = future.result()
+    if result is None or not getattr(result, 'success', True):
+        node.get_logger().error("Failed to spawn robot")
+        return False
     node.get_logger().info("TB3 spawned successfully")
     return True
 
