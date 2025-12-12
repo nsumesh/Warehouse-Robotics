@@ -210,12 +210,12 @@ RUN git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3.git \
 
 # Install TurtleBot3 dependencies
 WORKDIR /root/turtlebot3_ws
-RUN . /opt/ros/humble/setup.bash && \
-    rosdep install --from-paths src --ignore-src -r -y --rosdistro humble || true
+RUN bash -c "source /opt/ros/humble/setup.bash && \
+    rosdep install --from-paths src --ignore-src -r -y --rosdistro humble || true"
 
 # Build TurtleBot3 packages
-RUN . /opt/ros/humble/setup.bash && \
-    colcon build --symlink-install
+RUN bash -c "source /opt/ros/humble/setup.bash && \
+    colcon build --symlink-install"
 
 # -----------------------------------------------------------------------
 # PHASE 6: FETCH AND BUILD GAZEBO_ROS_PKGS
@@ -268,26 +268,26 @@ RUN ARCH=$(dpkg --print-architecture) && \
 # Build gazebo_ros_pkgs
 # This may fail on ARM if Gazebo Classic is not installed
 RUN ARCH=$(dpkg --print-architecture) && \
-    . /opt/ros/humble/setup.bash && \
+    bash -c "source /opt/ros/humble/setup.bash && \
     if colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release 2>&1 | tee /tmp/build.log; then \
-        echo "gazebo_ros_pkgs built successfully"; \
+        echo \"gazebo_ros_pkgs built successfully\"; \
     else \
-        BUILD_EXIT=${PIPESTATUS[0]}; \
-        if [ "$ARCH" != "amd64" ] && [ "$ARCH" != "i386" ]; then \
-            echo "========================================" && \
-            echo "Build failed on $ARCH architecture" && \
-            echo "This is likely because Gazebo Classic is not installed" && \
-            echo "========================================" && \
-            echo "To fix this on ARM, you need to either:" && \
-            echo "1. Build Gazebo Classic from source (see Gazebo documentation)" && \
-            echo "2. Use a Docker multi-stage build with a Gazebo base image" && \
-            echo "3. Use an alternative simulation platform" && \
-            echo "========================================"; \
+        BUILD_EXIT=\${PIPESTATUS[0]}; \
+        if [ \"\$ARCH\" != \"amd64\" ] && [ \"\$ARCH\" != \"i386\" ]; then \
+            echo \"========================================\"; \
+            echo \"Build failed on \$ARCH architecture\"; \
+            echo \"This is likely because Gazebo Classic is not installed\"; \
+            echo \"========================================\"; \
+            echo \"To fix this on ARM, you need to either:\"; \
+            echo \"1. Build Gazebo Classic from source (see Gazebo documentation)\"; \
+            echo \"2. Use a Docker multi-stage build with a Gazebo base image\"; \
+            echo \"3. Use an alternative simulation platform\"; \
+            echo \"========================================\"; \
         else \
-            echo "Build failed on $ARCH - unexpected error"; \
+            echo \"Build failed on \$ARCH - unexpected error\"; \
         fi; \
-        exit $BUILD_EXIT; \
-    fi
+        exit \$BUILD_EXIT; \
+    fi"
 
 # -----------------------------------------------------------------------
 # PHASE 7: INSTALL PYTHON DEPENDENCIES
@@ -312,10 +312,10 @@ WORKDIR /root/MSML642FinalProject
 COPY . /root/MSML642FinalProject/
 
 # Build the project packages
-RUN . /opt/ros/humble/setup.bash && \
-    . /root/turtlebot3_ws/install/setup.bash && \
-    . /root/gazebo_ros_pkgs_ws/install/setup.bash && \
-    colcon build --symlink-install || echo "Build completed with some warnings/errors"
+RUN bash -c "source /opt/ros/humble/setup.bash && \
+    source /root/turtlebot3_ws/install/setup.bash && \
+    source /root/gazebo_ros_pkgs_ws/install/setup.bash && \
+    colcon build --symlink-install || echo \"Build completed with some warnings/errors\""
 
 # -----------------------------------------------------------------------
 # FINAL CONFIGURATION
