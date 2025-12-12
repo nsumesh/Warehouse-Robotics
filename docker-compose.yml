@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  ros-gazebo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_GAZEBO_FROM_SOURCE: ${BUILD_GAZEBO_FROM_SOURCE:-false}
+    image: ros-gazebo-project
+    container_name: ros-gazebo-project
+    network_mode: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - TURTLEBOT3_MODEL=waffle_pi
+      - GAZEBO_MODEL_PATH=/root/MSML642FinalProject/gazebo_models
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - .:/root/MSML642FinalProject
+      - /dev/dri:/dev/dri
+    stdin_open: true
+    tty: true
+    working_dir: /root/MSML642FinalProject
+    command: bash -c "source /opt/ros/humble/setup.bash && \
+                      source /root/turtlebot3_ws/install/setup.bash && \
+                      source /root/gazebo_ros_pkgs_ws/install/setup.bash && \
+                      source /root/MSML642FinalProject/install/setup.bash && \
+                      bash"

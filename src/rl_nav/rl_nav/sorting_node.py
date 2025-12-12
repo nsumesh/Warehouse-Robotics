@@ -1,9 +1,7 @@
 
 import os
-import sys
 import time
 import math
-import random
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -11,7 +9,6 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan, Image
 from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge
-import cv2
 from gazebo_msgs.srv import SpawnEntity, DeleteEntity
 from stable_baselines3 import PPO
 
@@ -22,7 +19,6 @@ from rl_nav.navigation_functions import euclidean_distance, goal_reached, check_
 from rl_nav.docking_functions import process_camera_image, docking_complete, docking_control
 from rl_nav.observation_functions import observation
 from rl_nav.fsm import FSM
-
 
 class SortingNode(Node):
     def __init__(self):
@@ -323,7 +319,7 @@ class SortingNode(Node):
             if self.active_items[item_id]['spawned']:
                 try:
                     if delete_entity(self, self.delete_client, item_id):
-                        self.get_logger().info(f"Cleaned up {item_id}")
+                        self.get_logger().info("Cleaning up items")
                 except Exception as e:
                     self.get_logger().warn(f"Exception cleaning up {item_id}: {e}")
 
@@ -331,8 +327,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = SortingNode()
     if robot_initilization(node, spawn_x=0.0, spawn_y=0.0)==False:
-        node.get_logger().error("TB3 spawn failed - make sure Gazebo is running")
-        node.get_logger().error("Launch Gazebo first: ./launch_warehouse.sh")
+        node.get_logger().error("The robot has not been spawned as gazebo is not running")
         node.destroy_node()
         try:
             rclpy.shutdown()
