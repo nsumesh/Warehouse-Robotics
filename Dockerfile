@@ -205,8 +205,8 @@ RUN rosdep init && rosdep update
 # PHASE 5: INSTALL TURTLEBOT3 PACKAGES
 # -----------------------------------------------------------------------
 WORKDIR /root/turtlebot3_ws/src
-RUN git clone -b humble-devel https://github.com/ROBOTIS-GIT/turtlebot3.git \
-    && git clone -b humble-devel https://github.com/ROBOTIS-GIT/turtlebot3_msgs.git
+RUN git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3.git \
+    && git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3_msgs.git
 
 # Install TurtleBot3 dependencies
 WORKDIR /root/turtlebot3_ws
