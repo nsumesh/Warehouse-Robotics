@@ -2,7 +2,7 @@
 <package format="3">
   <name>rl_nav</name>
   <version>0.1.0</version>
-  <description>PPO training on TurtleBot3 in Gazebo</description>
+  <description>PPO training/description>
   <maintainer email="you@example.com">you</maintainer>
   <license>MIT</license>
 

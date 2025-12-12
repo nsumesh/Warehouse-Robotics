@@ -301,7 +301,7 @@ class SortingNode(Node):
         observation = self.build_observation()
         if observation is None:
             if self.scan is None:
-                self.get_logger().warn("Waiting for LiDAR scan...")
+                self.get_logger().info("Scan is being setup")
             return
         action, _ = self.model.predict(observation, deterministic=True)
         v, w = self.actions[int(action)]
