@@ -1,12 +1,4 @@
-#!/usr/bin/env python3
-"""
-Sorting Node with Stage 3 PPO Navigation
 
-Manages virtual sorting tasks using trained Stage 3 PPO policy.
-Task classes: A, B, C (mapped to DOCK_A, DOCK_B, DOCK_C)
-FSM: IDLE → GO_PICKUP → GO_DROPOFF → IDLE (repeat for each task)
-     After all tasks: GO_DROPOFF → GO_DOCKING → IDLE (final docking only)
-"""
 import os
 import sys
 import signal
@@ -24,7 +16,7 @@ import cv2
 from gazebo_msgs.srv import SpawnEntity, DeleteEntity
 from stable_baselines3 import PPO
 
-from rl_nav.constants import dockA, dockB, dockC, pickup, success_region, sucess_close_bonus, warehouse_x_limit_max, warehouse_x_limit_min, warehouse_y_limit_max, warehouse_y_limit_min, robot_actions, docking_fsm_distance, docking_time
+from rl_nav.constants import dockA, dockB, dockC, pickup, success_region, robot_actions,docking_time
 from rl_nav.gazebo_functions import robot_initilization, entity_spawned, delete_entity, reset_robot_position, docking_blue_box, delete_blue_box
 from rl_nav.box_functions import generate_item, get_item_color
 from rl_nav.navigation_functions import euclidean_distance, goal_reached, check_collision, process_scan_to_bins
@@ -69,7 +61,6 @@ class SortingNode(Node):
         self.task_start_time = None
         self.max_task_time = 480.0 
         self.last_log_time = None  
-        self.last_stuck_check = None  
         self.last_stuck_dist = None  
         self.collision_check_enabled = False  
         self.start_time = None  #
@@ -90,7 +81,6 @@ class SortingNode(Node):
         self.docking_stable_duration = 3.0
         self.max_docking_time = docking_time
         self.docking_start_time = None
-        self.docking_transition_distance = docking_fsm_distance
         self.tasks(5)
         self.control_timer = self.create_timer(0.15, self.step)
         self.get_logger().info(f"SortingNode initialized. Task queue: {self.task_queue}")
@@ -194,9 +184,6 @@ class SortingNode(Node):
 
     def reset_robot_position(self):
         success = reset_robot_position(self)
-        if success:
-            self.last_stuck_check = None
-            self.last_stuck_dist = None
         return success
 
     def virtual_pickup(self, item_name, task):

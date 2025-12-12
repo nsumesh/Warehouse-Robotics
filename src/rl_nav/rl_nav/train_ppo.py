@@ -37,7 +37,6 @@ class Tb3Env(Node):
         self.pose = np.zeros(3, dtype=np.float32)
         self.goal = np.array([0.0, 6.0], dtype=np.float32)
         self.collision = False
-        self.min_obstacle_dist = self.max_range
         self.previous_dist = None
         self.episode_index = 0
         self.episode_steps = 0
@@ -51,7 +50,6 @@ class Tb3Env(Node):
             self.max_steps = 600 
         self.in_close_zone = False 
         self.actions = robot_actions
-        self.recent_positions = deque(maxlen=10)
         self.curriculum_stage = curriculum_stage
         self.task = None 
         self.metrics_path = None
@@ -176,7 +174,6 @@ class Tb3Env(Node):
         self.cumulative_reward = 0.0
         self.collision = False
         self.min_obstacle_dist = self.max_range
-        self.recent_positions.clear()
         
         if self.curriculum_stage == 3:
             self.pickup_reached = False

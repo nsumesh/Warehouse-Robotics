@@ -9,16 +9,7 @@ pickup_reward = 7.0  # Pickup success reward
 close_bonus = 1.0  # One-time bonus for entering close zone
 wrong_dock = 5.0  # Penalty for reaching wrong dock
 
-def angle(a: float, b: float):
-    d = a - b
-    while d > math.pi:
-        d -= 2.0 * math.pi
-    while d < -math.pi:
-        d += 2.0 * math.pi
-    return d
-
-
-def progress_reward(previous_distance, current_distance, progress_toward=progress):
+def progress_reward(previous_distance, current_distance, progress_toward=3):
     if previous_distance is None:
         return 0.0 
     diff = previous_distance - current_distance

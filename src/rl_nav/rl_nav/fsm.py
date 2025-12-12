@@ -1,5 +1,4 @@
 import time
-import math
 
 class FSM:
     def __init__(self, node):
@@ -56,7 +55,6 @@ class FSM:
         node.task = None
         node.items_spawned_for_current_task = False
         node.item_dropped_for_current_task = False
-        pickup_x, pickup_y = node.pickup_location
         node.get_logger().info("Going to pickup for task "+str(node.current_task))
     
     def pickup_state(self, curr):
