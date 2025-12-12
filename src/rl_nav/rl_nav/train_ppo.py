@@ -193,7 +193,7 @@ class Tb3Env(Node):
             done = True
         if self.episode_steps >= self.max_steps:
             done = True
-        current_status = {"Distance to Goal": current_distance, "Stage": self.curriculum_stage, "Episode Steps": self.episode_steps, "Success (Binary)": success, "Task type": self.task}
+        current_status = {"Distance to Goal": current_distance, "Stage": self.curriculum_stage, "Episode Steps": self.episode_steps, "Success": success, "Task type": self.task}
         return obs, reward, done, current_status
 
 class GymEnvironment(gym.Env):
