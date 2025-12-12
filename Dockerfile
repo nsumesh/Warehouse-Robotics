@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y \
     net-tools \
     python3-pip \
     python3-apt \
+    python3-empy \
     && locale-gen en_US en_US.UTF-8 \
     && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
@@ -208,14 +209,16 @@ WORKDIR /root/turtlebot3_ws/src
 RUN git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3.git \
     && git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3_msgs.git
 
-# Install TurtleBot3 dependencies
+# Install TurtleBot3 dependencies (ignore missing packages on ARM64)
 WORKDIR /root/turtlebot3_ws
 RUN bash -c "source /opt/ros/humble/setup.bash && \
-    rosdep install --from-paths src --ignore-src -r -y --rosdistro humble || true"
+    rosdep update && \
+    rosdep install --from-paths src --ignore-src -r -y --rosdistro humble 2>&1 | grep -v 'Unable to locate package' || true"
 
-# Build TurtleBot3 packages
+# Build TurtleBot3 packages (only build essential packages on ARM64)
+WORKDIR /root/turtlebot3_ws
 RUN bash -c "source /opt/ros/humble/setup.bash && \
-    colcon build --symlink-install"
+    colcon build --symlink-install --packages-select turtlebot3_msgs turtlebot3_description || true"
 
 # -----------------------------------------------------------------------
 # PHASE 6: FETCH AND BUILD GAZEBO_ROS_PKGS
