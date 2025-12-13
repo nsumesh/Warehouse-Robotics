@@ -24,15 +24,7 @@ class WarehouseObjectSpawner(Node):
         self.get_logger().info("Warehouse Object Spawner initialized")
     
     def generate_box_sdf(self, size, mass, color_rgba, friction=1.0):
-        """
-        Generate SDF for a pickable box
-        
-        Args:
-            size: [x, y, z] dimensions in meters
-            mass: mass in kg
-            color_rgba: [r, g, b, a] color values (0-1)
-            friction: friction coefficient
-        """
+      	"""Generate SDF for box"""
         ixx = (mass / 12.0) * (size[1]**2 + size[2]**2)
         iyy = (mass / 12.0) * (size[0]**2 + size[2]**2)
         izz = (mass / 12.0) * (size[0]**2 + size[1]**2)
@@ -463,12 +455,12 @@ class WarehouseObjectSpawner(Node):
         
         self.get_logger().info("Warehouse environment created successfully!")
         self.get_logger().info("Object categories:")
-        self.get_logger().info("  - Ground boxes: Easy to reach")
-        self.get_logger().info("  - Low shelf boxes (0.5m): Moderate difficulty")
-        self.get_logger().info("  - Medium shelf boxes (1.0m): Challenging")
-        self.get_logger().info("  - High shelf boxes (1.5m): Very challenging")
-        self.get_logger().info("  - Pallet boxes (0.15m): Slightly elevated")
-        self.get_logger().info("  - Scattered boxes: Various positions")
+        self.get_logger().info("- Ground boxes")
+        self.get_logger().info("- Low shelf boxes (0.5m)")
+        self.get_logger().info("- Medium shelf boxes (1.0m)")
+        self.get_logger().info("- High shelf boxes (1.5m)")
+        self.get_logger().info("- Pallet boxes (0.15m)")
+        self.get_logger().info("- Scattered boxes")
 
     def spawn_warehouse_lanes(self):
         self.get_logger().info("Spawning warehouse layout...")
