@@ -1,3 +1,7 @@
+'''
+navigation_functions.py : this file provides navigation and vision functions for the robot, it processes LiDAR scan data and detects collisions and determins goal reaching conditions.
+'''
+
 import math
 import time
 import numpy as np

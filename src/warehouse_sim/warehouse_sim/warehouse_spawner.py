@@ -11,11 +11,9 @@ class WarehouseObjectSpawner(Node):
     def __init__(self):
         super().__init__('warehouse_object_spawner')
         
-        # Create service clients
         self.spawn_client = self.create_client(SpawnEntity, '/spawn_entity')
         self.delete_client = self.create_client(DeleteEntity, '/delete_entity')
         
-        # Wait for services to be available
         self.get_logger().info('Waiting for Gazebo services...')
         while not self.spawn_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Spawn service not available, waiting...')
@@ -35,7 +33,6 @@ class WarehouseObjectSpawner(Node):
             color_rgba: [r, g, b, a] color values (0-1)
             friction: friction coefficient
         """
-        # Calculate inertia (for box: I = m/12 * (h^2 + d^2))
         ixx = (mass / 12.0) * (size[1]**2 + size[2]**2)
         iyy = (mass / 12.0) * (size[0]**2 + size[2]**2)
         izz = (mass / 12.0) * (size[0]**2 + size[1]**2)
@@ -180,11 +177,9 @@ class WarehouseObjectSpawner(Node):
         request.robot_namespace = ""
         request.reference_frame = "world"
         
-        # Set pose
         request.initial_pose = Pose()
         request.initial_pose.position = Point(x=float(x), y=float(y), z=float(z))
         
-        # Convert RPY to quaternion
         cy = math.cos(yaw * 0.5)
         sy = math.sin(yaw * 0.5)
         cp = math.cos(pitch * 0.5)
@@ -199,7 +194,6 @@ class WarehouseObjectSpawner(Node):
         
         request.initial_pose.orientation = Quaternion(x=qx, y=qy, z=qz, w=qw)
         
-        # Call service
         future = self.spawn_client.call_async(request)
         rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
         
@@ -214,7 +208,6 @@ class WarehouseObjectSpawner(Node):
         """Delete all spawned objects"""
         objects_to_delete = []
         
-        # Collect all object names
         for i in range(100):
             objects_to_delete.extend([
                 f"ground_box_{i}",
@@ -249,7 +242,6 @@ class WarehouseObjectSpawner(Node):
         
         self.get_logger().info("Creating warehouse environment...")
         
-        # Box type definitions
         box_types = {
             'small': {'size': [0.1, 0.1, 0.1], 'mass': 0.3, 'color': [0.8, 0.3, 0.2, 1.0]},
             'medium': {'size': [0.15, 0.15, 0.15], 'mass': 0.5, 'color': [0.3, 0.6, 0.8, 1.0]},
@@ -257,7 +249,6 @@ class WarehouseObjectSpawner(Node):
             'rectangular': {'size': [0.25, 0.15, 0.1], 'mass': 0.6, 'color': [0.9, 0.7, 0.2, 1.0]}
         }
         
-        # 1. GROUND LEVEL BOXES
         self.get_logger().info("Spawning ground level boxes...")
         ground_positions = [
             (2, 2), (2, -2), (-2, 2), (-2, -2),
@@ -278,7 +269,6 @@ class WarehouseObjectSpawner(Node):
             self.spawn_object(f"ground_box_{idx}", sdf, x, y, z)
             time.sleep(0.1)
         
-        # 2. LOW SHELVES with boxes
         self.get_logger().info("Spawning low shelves with boxes...")
         low_shelf_configs = [
             {'x': 6, 'y': 2, 'yaw': 0},
@@ -318,7 +308,6 @@ class WarehouseObjectSpawner(Node):
                 )
                 time.sleep(0.1)
         
-        # 3. MEDIUM SHELVES with boxes
         self.get_logger().info("Spawning medium shelves with boxes...")
         medium_shelf_configs = [
             {'x': 8, 'y': 0, 'yaw': 0},
@@ -358,7 +347,6 @@ class WarehouseObjectSpawner(Node):
                 )
                 time.sleep(0.1)
         
-        # 4. HIGH SHELVES with boxes
         self.get_logger().info("Spawning high shelves with boxes...")
         high_shelf_configs = [
             {'x': 10, 'y': 3, 'yaw': 0},
@@ -396,7 +384,6 @@ class WarehouseObjectSpawner(Node):
                 )
                 time.sleep(0.1)
         
-        # 5. PALLET BOXES
         self.get_logger().info("Spawning pallet boxes...")
         pallet_positions = [
             (5, 5), (5, -5), (-5, 5), (-5, -5)
@@ -450,7 +437,6 @@ class WarehouseObjectSpawner(Node):
                 )
                 time.sleep(0.1)
         
-        # 6. SCATTERED BOXES
         self.get_logger().info("Spawning scattered boxes...")
         for idx in range(15):
             x = random.uniform(-9, 9)
@@ -485,9 +471,7 @@ class WarehouseObjectSpawner(Node):
         self.get_logger().info("  - Scattered boxes: Various positions")
 
     def spawn_warehouse_lanes(self):
-        self.get_logger().info("Spawning simplified warehouse layout...")
-
-        # SIMPLIFIED: Two aisles, fewer shelves for limited workspace
+        self.get_logger().info("Spawning warehouse layout...")
         lane_x_positions = [-3.0, 1.0]   # TWO aisles with more spacing (4.0m apart)
         num_shelves_per_lane = 3    # 3 shelves per aisle
         start_y = -2.0              # Start within workspace bounds
@@ -519,7 +503,6 @@ class WarehouseObjectSpawner(Node):
                 self.spawn_object(shelf_name, shelf_sdf, x, y, 0.0, yaw=0.0)
                 time.sleep(0.1)
 
-                # 2 boxes per shelf (was 3) for simpler layout
                 num_boxes = 2
                 for b in range(num_boxes):
                     bx = x - shelf_width / 2 + 0.3 + b * 0.35
@@ -531,9 +514,8 @@ class WarehouseObjectSpawner(Node):
                     self.spawn_object(box_name, sdf, bx, by, bz)
                     time.sleep(0.1)
 
-        # ----- Two pallets at one end (one per aisle) -----
-        pallet_y = -4.0  # Closer to workspace (was -9.0)
-        pallet_x_positions = [-3.0, 1.0]  # Two pallets (one per aisle, matching aisle positions)
+        pallet_y = -4.0  
+        pallet_x_positions = [-3.0, 1.0]  
 
         for idx, x in enumerate(pallet_x_positions):
             pallet_sdf = """<?xml version='1.0'?>
@@ -558,7 +540,6 @@ class WarehouseObjectSpawner(Node):
             self.spawn_object(f"lane_pallet_{idx}", pallet_sdf, x, pallet_y, 0.075)
             time.sleep(0.1)
 
-            # 1 box on pallet (was 2) for minimal clutter
             size = [0.25, 0.20, 0.18]
             mass = 0.8
             color = [0.8, 0.5, 0.2, 1]
@@ -579,17 +560,11 @@ def main(args=None):
     rclpy.init(args=args)
     
     spawner = WarehouseObjectSpawner()
-    # Optional: Clear existing objects
-    spawner.get_logger().info("Clearing existing objects...")
+    spawner.get_logger().info("Clearing existing objects")
     spawner.clear_all_objects()
     time.sleep(1)
-    
-    # Spawn warehouse environment
     spawner.spawn_warehouse_lanes()
-    
-    spawner.get_logger().info("Warehouse setup complete!")
-    
-    # Keep node alive
+    spawner.get_logger().info("Warehouse setup complete")
     try:
         rclpy.spin(spawner)
     except KeyboardInterrupt:

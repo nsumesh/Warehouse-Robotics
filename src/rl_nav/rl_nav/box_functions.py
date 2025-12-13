@@ -1,3 +1,8 @@
+'''
+box_functions.py: This file generates items and gets the appropriate task color for the item, generating physics compatible boxes
+'''
+
+
 from rl_nav.constants import item_size_coordinates, item_mass, colors
 
 def generate_item(item_name, color):

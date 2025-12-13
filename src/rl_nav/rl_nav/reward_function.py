@@ -1,3 +1,7 @@
+'''
+reward_function.py : this file sets up the reward shaping function for PPO training. It provides appropriatre rewards for progress, task complettion, collision and incorrect actions
+'''
+
 import math
 from rl_nav.constants import success_region, sucess_close_bonus, dockA, dockB, dockC, pickup
 

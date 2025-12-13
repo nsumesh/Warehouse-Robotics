@@ -1,3 +1,8 @@
+'''
+observation_function.py
+This file constructs observation vectors, it combines LiDAR scan datam goal position and task observation and sets it up in a task space.
+'''
+
 import numpy as np
 from rl_nav.constants import lidar_bins
 
@@ -5,7 +10,6 @@ from rl_nav.constants import lidar_bins
 def encode_task(task, phase=None):
     if phase == "pickup" or task is None:
         return np.array([1.0, 0.0, 0.0], dtype=np.float32)
-    
     if task == 'A':
         return np.array([1.0, 0.0, 0.0], dtype=np.float32)
     elif task == 'B':

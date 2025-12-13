@@ -1,3 +1,8 @@
+'''
+train_ppo.py : This file creates a gymnasium environment which trains the waffle pi with the custom PPO policy using reward shaping. 
+Curriculum learning is implemented here in 3 stages and an MLP policy is defined for the training configuration with a TanH activation function.
+'''
+
 import os
 import math
 import time
@@ -218,7 +223,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timesteps", type=int, default=20000)
     parser.add_argument("--logdir", type=str, default="ppo_runs")
-    parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--curriculum-stage", type=int, default=1, choices=[1, 2, 3])
     args = parser.parse_args()
     rclpy.init()
@@ -232,14 +236,6 @@ def main():
         return
     environment = GymEnvironment(node)
     model = None
-    if args.resume:
-        resume_path = args.resume if os.path.isabs(args.resume) else os.path.join(log_dir, args.resume)
-        resume_path = os.path.expanduser(resume_path)
-        if os.path.exists(resume_path):
-            node.get_logger().info("Resuming from checkpoint: " + resume_path)
-            model = PPO.load(resume_path, env=environment)
-        else:
-            node.get_logger().warn("Checkpoint not found: " + resume_path + ". Training will start fresh.")
     if model is None:
         model = PPO("MlpPolicy", environment, verbose=1, tensorboard_log=args.logdir, n_steps=256, batch_size=64, n_epochs=10, learning_rate=3e-4, gamma=0.99, gae_lambda=0.95, clip_range=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, policy_kwargs=dict(net_arch=[64, 64], activation_fn=torch.nn.Tanh))
         node.get_logger().info("New training starting")

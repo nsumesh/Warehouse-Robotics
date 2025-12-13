@@ -1,3 +1,7 @@
+'''
+This file handles visual docking using camera based blue marker detection, processing the camera image to track blue docking markers and uses that to determine docking completion.
+'''
+
 import time
 import numpy as np
 import cv2

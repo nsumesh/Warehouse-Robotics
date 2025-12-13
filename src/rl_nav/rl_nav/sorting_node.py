@@ -1,3 +1,12 @@
+'''
+sorting_node.py
+
+This node implements a sorting node and integrates a learned PPO navigation policy for tasks and finite state machine for management of tasks. 
+The main components include loading the PPO model, integrating the FSM, item management where it spawns, deletes items and the docking system. It also uses the LiDAR and Odom sensos for navigation
+It completes this by setting up a queue of tasks, spawning the item associated with the task, do a virtual pickup and dropoff and finally cleanup the environment in a set time period.
+
+'''
+
 
 import os
 import time
@@ -29,11 +38,10 @@ class SortingNode(Node):
             model_path = os.path.join(os.getcwd(), "ppo_runs", "ppo_stage3_sorting.zip")
         if not os.path.exists(model_path):
             self.get_logger().error("Model file not found")
-            raise FileNotFoundError("PPO model not found")
         self.fsm = FSM(self)        
         self.task_timer = self.create_timer(0.5, self.fsm.move)
         self.model = PPO.load(model_path)
-        self.get_logger().info(f"Loaded Stage 3 PPO model: {model_path}")
+        self.get_logger().info("Loaded Final PPO model")
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
         self.scan_sub = self.create_subscription(LaserScan, "/scan", self.scan_for_bins, 10)
         self.odom_sub = self.create_subscription(Odometry, "/odom", self.update_pose, 10)
@@ -41,31 +49,21 @@ class SortingNode(Node):
         self.bridge = CvBridge()
         self.delete_client = self.create_client(DeleteEntity, "/delete_entity")
         self.spawn_client = self.create_client(SpawnEntity, "/spawn_entity")
-        self.pickup_location = pickup
         self.drop_docks = {'A': dockA,'B': dockB,'C': dockC}
         self.actions = robot_actions
         self.scan = None
         self.pose = np.zeros(3, dtype=np.float32)
         self.current_goal = None
         self.task = None 
-        self.goal_region = success_region 
         self.goal_reached_time = None  
         self.task_queue = []
         self.current_task = None
         self.phase = "idle" 
         self.task_start_time = None
-        self.max_task_time = 480.0 
         self.last_log_time = None  
-        self.last_stuck_dist = None  
-        self.collision_check_enabled = False  
-        self.start_time = None 
-        self.last_collision_time = None  
         self.items_at_pickup = {}  
         self.active_items = {}  
         self.item_counter = {'A': 0, 'B': 0, 'C': 0} 
-        self.current_item_id = None 
-        self.items_spawned_for_current_task = False  
-        self.item_dropped_for_current_task = False  
         self.dropped_items = {}  
         self.blue_marker_detected = False
         self.blue_marker_area = 0
@@ -74,10 +72,8 @@ class SortingNode(Node):
         self.docking_complete = False
         self.docking_stable_time = None
         self.docking_stable_duration = 3.0
-        self.max_docking_time = docking_time
-        self.docking_start_time = None
         self.tasks(5)
-        self.control_timer = self.create_timer(0.15, self.step)
+        self.step_timer = self.create_timer(0.15, self.step)
         self.get_logger().info("Sorting is up and running. Task queue:" +str(self.task_queue))
 
     def scan_for_bins(self, msg):
@@ -149,7 +145,7 @@ class SortingNode(Node):
         return euclidean_distance(self.pose, self.current_goal)
     
     def goal_reached_check(self):
-        reached, new_time = goal_reached(self.pose, self.current_goal, self.goal_region, self.goal_reached_time, 3.0)
+        reached, new_time = goal_reached(self.pose, self.current_goal, success_region, self.goal_reached_time, 3.0)
         self.goal_reached_time = new_time
         return reached
 
@@ -158,24 +154,22 @@ class SortingNode(Node):
 
     def spawn_items_for_task(self):
         if not self.spawn_client.service_is_ready():
-            self.get_logger().warn("Spawn service not ready")
             return False
         if self.current_task is None:
             return False
         task = self.current_task
         if task not in self.items_at_pickup or len(self.items_at_pickup[task]) == 0:
-            self.get_logger().warn("No items available")
             return False
         item_id = self.items_at_pickup[task][0]  
         if item_id in self.active_items and self.active_items[item_id]['spawned']:
             return True
-        pickup_x, pickup_y = self.pickup_location        
+        pickup_x, pickup_y = pickup        
         color = get_item_color(task)
         item = generate_item(item_id, color)
         if entity_spawned(self, self.spawn_client, item_id, item, pickup_x, pickup_y, 0.15):
             self.active_items[item_id]['spawned'] = True
             return True
-        self.get_logger().warn("Failed to spawn item")
+        self.get_logger().warn("SpawnService is not working, items cannot be spawned")
         return False
 
     def reset_robot_position(self):
@@ -205,7 +199,7 @@ class SortingNode(Node):
         if entity_spawned(self, self.spawn_client, item_id, item, dock_x, dock_y, 0.15):
             message = "Dropped " + str(item_id) + "item at Dock " + str(task) 
             self.get_logger().info(message)
-            self.dropped_items[item_id] = {'dropoff_time': time.time(),'task': task}
+            self.dropped_items[item_id] = {'dropoff time': time.time(),'task': task}
             return True
         else:
             self.get_logger().warn("Simulating dropoff")
@@ -224,7 +218,7 @@ class SortingNode(Node):
             info = self.dropped_items.get(item_id)
             if info is None:
                 continue
-            d_time = info.get("dropoff_time", 0)
+            d_time = info.get("dropoff time", 0)
             diff = curr_time-d_time
             if diff>=2.5:
                 delete = delete_entity(self, self.delete_client, item_id)
@@ -236,7 +230,6 @@ class SortingNode(Node):
     def reset_task_state(self):
         self.current_task = None
         self.task = None
-        self.current_item_id = None
         self.phase = "idle"
         self.current_goal = None
         self.task_start_time = None
@@ -246,7 +239,6 @@ class SortingNode(Node):
         self.blue_marker_centered = False
         self.blue_marker_error_x = 0
         self.docking_stable_time = None
-        self.item_dropped_for_current_task = False 
         
         if not self.task_queue:
             self.get_logger().info("All tasks completed!")
@@ -321,7 +313,7 @@ class SortingNode(Node):
                     if delete_entity(self, self.delete_client, item_id):
                         self.get_logger().info("Cleaning up items")
                 except Exception as e:
-                    self.get_logger().warn(f"Exception cleaning up {item_id}: {e}")
+                    self.get_logger().info("Exception caused")
 
 def main(args=None):
     rclpy.init(args=args)

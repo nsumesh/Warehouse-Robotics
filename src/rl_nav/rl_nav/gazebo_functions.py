@@ -1,3 +1,7 @@
+'''
+gazebo_functions.py : This set up the functions for robot spawning, entity management, position reset and the docking marker placement
+'''
+
 import os
 import math
 import rclpy

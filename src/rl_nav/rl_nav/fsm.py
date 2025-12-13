@@ -1,3 +1,7 @@
+'''
+fsm.py : This file implements the finite state machine for robot task execution setting up the flow between the stages which are idle, pickup, dropoff, and docking finally
+'''
+
 import time
 
 class FSM:
