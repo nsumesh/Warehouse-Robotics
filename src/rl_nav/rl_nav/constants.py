@@ -1,0 +1,27 @@
+'''
+constants.py : this file consists of all the constants used throughout the package across differnt functions. It has been centralized in one file for ease of use.
+'''
+
+
+warehouse_x_limit_min, warehouse_x_limit_max = -7.0, 2.0
+warehouse_y_limit_min, warehouse_y_limit_max = -3.0, 3.0
+dockA = (-6.5, -2.0)  
+dockB = (-6.5, 0.0)   
+dockC = (-6.5, 2.0)
+pickup = (-4.0, 0.0)
+success_region = 0.7  
+sucess_close_bonus = 1.5  
+item_size_coordinates = [0.2, 0.2, 0.3] 
+item_mass = 0.5
+colors = {'A': [0.8, 0.2, 0.2, 1.0], 'B': [0.2, 0.8, 0.2, 1.0], 'C': [1.0, 0.55, 0.0, 1.0]}
+robot_actions = [(0.12, 0.6),(0.15, 0.0),(0.12, -0.6),(0.00, 0.6),(0.00, -0.6)]
+max_clamp_range = 3.5
+lidar_bins = 24
+docking_fsm_distance = 1.5 
+docking_success_duration = 3.0 
+docking_time = 600.0  
+initial_detection_threshold = 800000  
+final_docking_threshold = 2000000  
+alignment_threshold = 50  
+lower_hsv_mask = [100, 150, 50]
+upper_hsv_mask = [140, 255, 255]

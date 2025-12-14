@@ -1,0 +1,1 @@
+"""Warehouse simulation package for ROS 2 Gazebo."""

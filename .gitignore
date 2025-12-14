@@ -1,0 +1,56 @@
+build/
+install/
+log/
+.colcon/
+COLCON_IGNORE
+
+.ros/
+
+*.log
+rosbag2_*/*
+rosbag2_*
+*.db3
+metadata.yaml
+frames.pdf 
+
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+dist/
+pip-wheel-metadata/
+*.pkl
+*.pickle
+
+.venv/
+venv/
+env/
+.env
+.env.*
+
+.ipynb_checkpoints/
+
+# Training outputs - uncomment to ignore, or commit specific models
+# ppo_runs/
+# runs/               
+# checkpoints/
+# models/
+# *.zip                
+# *.pt
+# *.pth
+
+# But keep episode_metrics.csv for tracking
+!ppo_runs/episode_metrics.csv
+
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+*.tmp
+*.temp
+*~
