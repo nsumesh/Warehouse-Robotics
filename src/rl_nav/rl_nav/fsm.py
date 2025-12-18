@@ -3,7 +3,6 @@ fsm.py : This file implements the finite state machine for robot task execution 
 '''
 
 import time
-
 class FSM:
     def __init__(self, node):
         self.node = node

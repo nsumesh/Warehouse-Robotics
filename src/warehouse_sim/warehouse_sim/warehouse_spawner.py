@@ -24,17 +24,17 @@ class WarehouseObjectSpawner(Node):
         self.get_logger().info("Warehouse Object Spawner initialized")
     
     def generate_box_sdf(self, size, mass, color_rgba, friction=1.0):
-      	"""Generate SDF for box"""
+        """Generate SDF for box"""
         ixx = (mass / 12.0) * (size[1]**2 + size[2]**2)
         iyy = (mass / 12.0) * (size[0]**2 + size[2]**2)
         izz = (mass / 12.0) * (size[0]**2 + size[1]**2)
-        
+
         sdf = f"""<?xml version='1.0'?>
-<sdf version='1.6'>
-  <model name='pickable_box'>
-    <pose>0 0 0 0 0 0</pose>
-    <link name='link'>
-      <inertial>
+        <sdf version='1.6'>
+        <model name='pickable_box'>
+        <pose>0 0 0 0 0 0</pose>
+        <link name='link'>
+        <inertial>
         <mass>{mass}</mass>
         <inertia>
           <ixx>{ixx}</ixx>
@@ -44,8 +44,8 @@ class WarehouseObjectSpawner(Node):
           <ixz>0</ixz>
           <iyz>0</iyz>
         </inertia>
-      </inertial>
-      <collision name='collision'>
+        </inertial>
+        <collision name='collision'>
         <geometry>
           <box>
             <size>{size[0]} {size[1]} {size[2]}</size>
@@ -67,8 +67,8 @@ class WarehouseObjectSpawner(Node):
             </ode>
           </friction>
         </surface>
-      </collision>
-      <visual name='visual'>
+        </collision>
+        <visual name='visual'>
         <geometry>
           <box>
             <size>{size[0]} {size[1]} {size[2]}</size>
@@ -78,87 +78,84 @@ class WarehouseObjectSpawner(Node):
           <ambient>{color_rgba[0]} {color_rgba[1]} {color_rgba[2]} {color_rgba[3]}</ambient>
           <diffuse>{color_rgba[0]} {color_rgba[1]} {color_rgba[2]} {color_rgba[3]}</diffuse>
         </material>
-      </visual>
-    </link>
-  </model>
-</sdf>"""
+        </visual>
+        </link>
+        </model>
+        </sdf>"""
         return sdf
     
     def generate_shelf_sdf(self, width, depth, height, shelf_height):
         """Generate SDF for a simple shelf structure"""
         sdf = f"""<?xml version='1.0'?>
-<sdf version='1.6'>
-  <model name='shelf'>
-    <static>true</static>
-    <link name='base'>
-      <!-- Left vertical support -->
-      <collision name='left_support_collision'>
-        <pose>0 0 {height/2} 0 0 0</pose>
-        <geometry>
-          <box>
-            <size>0.05 {depth} {height}</size>
-          </box>
-        </geometry>
-      </collision>
-      <visual name='left_support_visual'>
-        <pose>0 0 {height/2} 0 0 0</pose>
-        <geometry>
-          <box>
-            <size>0.05 {depth} {height}</size>
-          </box>
-        </geometry>
-        <material>
-          <ambient>0.5 0.5 0.5 1</ambient>
-          <diffuse>0.5 0.5 0.5 1</diffuse>
-        </material>
-      </visual>
-      
-      <!-- Right vertical support -->
-      <collision name='right_support_collision'>
-        <pose>{width} 0 {height/2} 0 0 0</pose>
-        <geometry>
-          <box>
-            <size>0.05 {depth} {height}</size>
-          </box>
-        </geometry>
-      </collision>
-      <visual name='right_support_visual'>
-        <pose>{width} 0 {height/2} 0 0 0</pose>
-        <geometry>
-          <box>
-            <size>0.05 {depth} {height}</size>
-          </box>
-        </geometry>
-        <material>
-          <ambient>0.5 0.5 0.5 1</ambient>
-          <diffuse>0.5 0.5 0.5 1</diffuse>
-        </material>
-      </visual>
-      
-      <!-- Shelf surface -->
-      <collision name='shelf_collision'>
-        <pose>{width/2} 0 {shelf_height} 0 0 0</pose>
-        <geometry>
-          <box>
-            <size>{width} {depth} 0.02</size>
-          </box>
-        </geometry>
-      </collision>
-      <visual name='shelf_visual'>
-        <pose>{width/2} 0 {shelf_height} 0 0 0</pose>
-        <geometry>
-          <box>
-            <size>{width} {depth} 0.02</size>
-          </box>
-        </geometry>
-        <material>
-          <ambient>0.7 0.5 0.3 1</ambient>
-          <diffuse>0.7 0.5 0.3 1</diffuse>
-        </material>
-      </visual>
-    </link>
-  </model>
-</sdf>"""
+        <sdf version='1.6'>
+          <model name='shelf'>
+            <static>true</static>
+            <link name='base'>
+              <collision name='left_support_collision'>
+                <pose>0 0 {height/2} 0 0 0</pose>
+                <geometry>
+                  <box>
+                    <size>0.05 {depth} {height}</size>
+                  </box>
+                </geometry>
+              </collision>
+              <visual name='left_support_visual'>
+                <pose>0 0 {height/2} 0 0 0</pose>
+                <geometry>
+                  <box>
+                    <size>0.05 {depth} {height}</size>
+                  </box>
+                </geometry>
+                <material>
+                  <ambient>0.5 0.5 0.5 1</ambient>
+                  <diffuse>0.5 0.5 0.5 1</diffuse>
+                </material>
+              </visual>
+              
+              <collision name='right_support_collision'>
+                <pose>{width} 0 {height/2} 0 0 0</pose>
+                <geometry>
+                  <box>
+                    <size>0.05 {depth} {height}</size>
+                  </box>
+                </geometry>
+              </collision>
+              <visual name='right_support_visual'>
+                <pose>{width} 0 {height/2} 0 0 0</pose>
+                <geometry>
+                  <box>
+                    <size>0.05 {depth} {height}</size>
+                  </box>
+                </geometry>
+                <material>
+                  <ambient>0.5 0.5 0.5 1</ambient>
+                  <diffuse>0.5 0.5 0.5 1</diffuse>
+                </material>
+              </visual>
+              
+              <collision name='shelf_collision'>
+                <pose>{width/2} 0 {shelf_height} 0 0 0</pose>
+                <geometry>
+                  <box>
+                    <size>{width} {depth} 0.02</size>
+                  </box>
+                </geometry>
+              </collision>
+              <visual name='shelf_visual'>
+                <pose>{width/2} 0 {shelf_height} 0 0 0</pose>
+                <geometry>
+                  <box>
+                    <size>{width} {depth} 0.02</size>
+                  </box>
+                </geometry>
+                <material>
+                  <ambient>0.7 0.5 0.3 1</ambient>
+                  <diffuse>0.7 0.5 0.3 1</diffuse>
+                </material>
+              </visual>
+            </link>
+          </model>
+        </sdf>"""
         return sdf
     
     def spawn_object(self, name, sdf_string, x, y, z, roll=0, pitch=0, yaw=0):
@@ -218,7 +215,13 @@ class WarehouseObjectSpawner(Node):
                 f"pallet_box_{i}_1",
                 f"pallet_box_{i}_2",
                 f"pallet_box_{i}_3",
-                f"scattered_box_{i}"
+                f"scattered_box_{i}",
+                # Add lanes objects to delete list
+                f"lane_pallet_{i}",
+                f"lane_pallet_box_{i}_0",
+                f"lane{0}_shelf_{i}", f"lane{1}_shelf_{i}",
+                f"lane{0}_shelfbox_{i}_0", f"lane{0}_shelfbox_{i}_1",
+                f"lane{1}_shelfbox_{i}_0", f"lane{1}_shelfbox_{i}_1"
             ])
         
         for obj_name in objects_to_delete:
@@ -260,214 +263,13 @@ class WarehouseObjectSpawner(Node):
             )
             self.spawn_object(f"ground_box_{idx}", sdf, x, y, z)
             time.sleep(0.1)
-        
-        self.get_logger().info("Spawning low shelves with boxes...")
-        low_shelf_configs = [
-            {'x': 6, 'y': 2, 'yaw': 0},
-            {'x': 6, 'y': -2, 'yaw': 0},
-            {'x': -6, 'y': 2, 'yaw': 0},
-            {'x': -6, 'y': -2, 'yaw': 0}
-        ]
-        
-        for idx, config in enumerate(low_shelf_configs):
-            shelf_sdf = self.generate_shelf_sdf(
-                width=1.0, depth=0.4, height=0.8, shelf_height=0.5
-            )
-            self.spawn_object(
-                f"shelf_low_{idx}",
-                shelf_sdf,
-                config['x'], config['y'], 0,
-                yaw=config['yaw']
-            )
-            time.sleep(0.1)
-            
-            for box_idx in range(2):
-                box_type = random.choice(['small', 'medium'])
-                box_config = box_types[box_type]
-                
-                box_x = config['x'] + 0.25 + (box_idx * 0.3)
-                box_y = config['y']
-                box_z = 0.5 + box_config['size'][2] / 2 + 0.01
-                
-                sdf = self.generate_box_sdf(
-                    box_config['size'],
-                    box_config['mass'],
-                    box_config['color']
-                )
-                self.spawn_object(
-                    f"low_shelf_box_{idx}_{box_idx}",
-                    sdf, box_x, box_y, box_z
-                )
-                time.sleep(0.1)
-        
-        self.get_logger().info("Spawning medium shelves with boxes...")
-        medium_shelf_configs = [
-            {'x': 8, 'y': 0, 'yaw': 0},
-            {'x': -8, 'y': 0, 'yaw': 0},
-            {'x': 0, 'y': 6, 'yaw': 1.57},
-            {'x': 0, 'y': -6, 'yaw': 1.57}
-        ]
-        
-        for idx, config in enumerate(medium_shelf_configs):
-            shelf_sdf = self.generate_shelf_sdf(
-                width=1.2, depth=0.4, height=1.5, shelf_height=1.0
-            )
-            self.spawn_object(
-                f"shelf_medium_{idx}",
-                shelf_sdf,
-                config['x'], config['y'], 0,
-                yaw=config['yaw']
-            )
-            time.sleep(0.1)
-            
-            for box_idx in range(3):
-                box_type = random.choice(['small', 'medium', 'rectangular'])
-                box_config = box_types[box_type]
-                
-                box_x = config['x'] + 0.2 + (box_idx * 0.25) if config['yaw'] == 0 else config['x']
-                box_y = config['y'] if config['yaw'] == 0 else config['y'] + 0.2 + (box_idx * 0.25)
-                box_z = 1.0 + box_config['size'][2] / 2 + 0.01
-                
-                sdf = self.generate_box_sdf(
-                    box_config['size'],
-                    box_config['mass'],
-                    box_config['color']
-                )
-                self.spawn_object(
-                    f"medium_shelf_box_{idx}_{box_idx}",
-                    sdf, box_x, box_y, box_z
-                )
-                time.sleep(0.1)
-        
-        self.get_logger().info("Spawning high shelves with boxes...")
-        high_shelf_configs = [
-            {'x': 10, 'y': 3, 'yaw': 0},
-            {'x': -10, 'y': -3, 'yaw': 0}
-        ]
-        
-        for idx, config in enumerate(high_shelf_configs):
-            shelf_sdf = self.generate_shelf_sdf(
-                width=1.5, depth=0.5, height=2.0, shelf_height=1.5
-            )
-            self.spawn_object(
-                f"shelf_high_{idx}",
-                shelf_sdf,
-                config['x'], config['y'], 0,
-                yaw=config['yaw']
-            )
-            time.sleep(0.1)
-            
-            for box_idx in range(2):
-                box_type = 'small'
-                box_config = box_types[box_type]
-                
-                box_x = config['x'] + 0.3 + (box_idx * 0.4)
-                box_y = config['y']
-                box_z = 1.5 + box_config['size'][2] / 2 + 0.01
-                
-                sdf = self.generate_box_sdf(
-                    box_config['size'],
-                    box_config['mass'],
-                    box_config['color']
-                )
-                self.spawn_object(
-                    f"high_shelf_box_{idx}_{box_idx}",
-                    sdf, box_x, box_y, box_z
-                )
-                time.sleep(0.1)
-        
-        self.get_logger().info("Spawning pallet boxes...")
-        pallet_positions = [
-            (5, 5), (5, -5), (-5, 5), (-5, -5)
-        ]
-        
-        for idx, (x, y) in enumerate(pallet_positions):
-            pallet_sdf = f"""<?xml version='1.0'?>
-<sdf version='1.6'>
-  <model name='pallet'>
-    <static>true</static>
-    <link name='link'>
-      <collision name='collision'>
-        <geometry>
-          <box><size>1.0 1.0 0.15</size></box>
-        </geometry>
-      </collision>
-      <visual name='visual'>
-        <geometry>
-          <box><size>1.0 1.0 0.15</size></box>
-        </geometry>
-        <material>
-          <ambient>0.6 0.4 0.2 1</ambient>
-          <diffuse>0.6 0.4 0.2 1</diffuse>
-        </material>
-      </visual>
-    </link>
-  </model>
-</sdf>"""
-            self.spawn_object(f"pallet_{idx}", pallet_sdf, x, y, 0.075)
-            time.sleep(0.1)
-            
-            for box_idx in range(4):
-                box_type = random.choice(['medium', 'large'])
-                box_config = box_types[box_type]
-                
-                offset_x = -0.25 + (box_idx % 2) * 0.5
-                offset_y = -0.25 + (box_idx // 2) * 0.5
-                
-                box_x = x + offset_x
-                box_y = y + offset_y
-                box_z = 0.15 + box_config['size'][2] / 2 + 0.01
-                
-                sdf = self.generate_box_sdf(
-                    box_config['size'],
-                    box_config['mass'],
-                    box_config['color']
-                )
-                self.spawn_object(
-                    f"pallet_box_{idx}_{box_idx}",
-                    sdf, box_x, box_y, box_z
-                )
-                time.sleep(0.1)
-        
-        self.get_logger().info("Spawning scattered boxes...")
-        for idx in range(15):
-            x = random.uniform(-9, 9)
-            y = random.uniform(-9, 9)
-            
-            if abs(x) < 1 and abs(y) < 1:
-                continue
-            
-            box_type = random.choice(list(box_types.keys()))
-            box_config = box_types[box_type]
-            z = box_config['size'][2] / 2
-            yaw = random.uniform(0, 2 * math.pi)
-            
-            sdf = self.generate_box_sdf(
-                box_config['size'],
-                box_config['mass'],
-                box_config['color']
-            )
-            self.spawn_object(
-                f"scattered_box_{idx}",
-                sdf, x, y, z, yaw=yaw
-            )
-            time.sleep(0.1)
-        
-        self.get_logger().info("Warehouse environment created successfully!")
-        self.get_logger().info("Object categories:")
-        self.get_logger().info("- Ground boxes")
-        self.get_logger().info("- Low shelf boxes (0.5m)")
-        self.get_logger().info("- Medium shelf boxes (1.0m)")
-        self.get_logger().info("- High shelf boxes (1.5m)")
-        self.get_logger().info("- Pallet boxes (0.15m)")
-        self.get_logger().info("- Scattered boxes")
 
     def spawn_warehouse_lanes(self):
         self.get_logger().info("Spawning warehouse layout...")
         lane_x_positions = [-3.0, 1.0]   # TWO aisles with more spacing (4.0m apart)
         num_shelves_per_lane = 3    # 3 shelves per aisle
         start_y = -2.0              # Start within workspace bounds
-        spacing_y = 2.5              # 2.5m spacing between shelves (more room)
+        spacing_y = 2.5             # 2.5m spacing between shelves (more room)
 
         shelf_width = 1.4
         shelf_depth = 0.45
@@ -511,24 +313,24 @@ class WarehouseObjectSpawner(Node):
 
         for idx, x in enumerate(pallet_x_positions):
             pallet_sdf = """<?xml version='1.0'?>
-        <sdf version='1.6'>
-        <model name='pallet'>
-        <static>true</static>
-        <link name='link'>
-        <collision name='collision'>
-        <geometry><box><size>1.0 1.0 0.15</size></box></geometry>
-        </collision>
-        <visual name='visual'>
-        <geometry><box><size>1.0 1.0 0.15</size></box></geometry>
-        <material>
-          <ambient>0.7 0.7 0.7 1</ambient>
-          <diffuse>0.7 0.7 0.7 1</diffuse>
-        </material>
-        </visual>
-        </link>
-        </model>
-        </sdf>
-        """
+            <sdf version='1.6'>
+            <model name='pallet'>
+            <static>true</static>
+            <link name='link'>
+            <collision name='collision'>
+            <geometry><box><size>1.0 1.0 0.15</size></box></geometry>
+            </collision>
+            <visual name='visual'>
+            <geometry><box><size>1.0 1.0 0.15</size></box></geometry>
+            <material>
+              <ambient>0.7 0.7 0.7 1</ambient>
+              <diffuse>0.7 0.7 0.7 1</diffuse>
+            </material>
+            </visual>
+            </link>
+            </model>
+            </sdf>
+            """
             self.spawn_object(f"lane_pallet_{idx}", pallet_sdf, x, pallet_y, 0.075)
             time.sleep(0.1)
 
@@ -545,7 +347,6 @@ class WarehouseObjectSpawner(Node):
 
         self.get_logger().info("Simplified warehouse created successfully!")
         self.get_logger().info("Layout: 2 aisles, 6 shelves, 12 boxes, 2 pallets (22 objects total)")
-
 
 
 def main(args=None):

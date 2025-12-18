@@ -5,12 +5,12 @@ reward_function.py : this file sets up the reward shaping function for PPO train
 import math
 from rl_nav.constants import success_region, sucess_close_bonus, dockA, dockB, dockC, pickup
 
-progress = 3.0  # Progress reward multiplier
+progress = 3.0  # Progress reward scale
 time_penalty = 0.003    # Time penalty per step
 collision_penalty = 5.0  # Collision penalty
 final_success_reward = 15.0  # Success reward
 pickup_reward = 7.0  # Pickup success reward
-close_bonus = 1.0  # One-time bonus for entering close zone
+close_bonus = 1.0  # One-time bonus 
 wrong_dock = 5.0  # Penalty for reaching wrong dock
 
 def progress_reward(previous_distance, current_distance, progress_toward=3):

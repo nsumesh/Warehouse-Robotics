@@ -68,7 +68,7 @@ def entity_spawned(node, spawn_client, name, xml, x, y, z, yaw= 0.0):
             return True 
         result = future.result()
         if result is None:
-            return True  # Assume success
+            return True  
         return getattr(result,'success',True)
     except Exception as e:
         return False

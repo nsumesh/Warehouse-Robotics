@@ -43,7 +43,7 @@ def process_scan_to_bins(scan_msg, num_bins=None, max_range=None):
         num_bins = lidar_bins
     if max_range is None:
         max_range = max_clamp_range
-    
+
     ranges = np.array(scan_msg.ranges, dtype=np.float32)  
     n = len(ranges)
     if n == 0:
